@@ -1,11 +1,6 @@
-"""
-OpenVINO GenAI Chat runner.
-Delegates execution to the modular ovchat package.
-"""
-
 import sys
-from ovchat.cli import main
-from ovchat.ui import UI
+from .cli import main
+from .ui import UI
 
 if __name__ == "__main__":
     try:
@@ -20,3 +15,4 @@ if __name__ == "__main__":
         except (KeyboardInterrupt, EOFError):
             pass
         sys.exit(1)
+
