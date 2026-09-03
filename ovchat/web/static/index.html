@@ -48,8 +48,9 @@
       <div class="sidebar-footer">
         <div class="model-status-card" id="statusCard">
           <div class="status-top">
-            <span class="status-dot online"></span>
+            <span class="status-dot" id="sidebarStatusDot"></span>
             <span class="status-model-name" id="sidebarModelName">No Model Loaded</span>
+            <button class="mini-eject-btn" id="sidebarEjectBtn" title="Eject / Unload model" style="display: none;">⏏</button>
           </div>
           <div class="status-details">
             <span class="status-badge" id="sidebarDeviceBadge">GPU</span>
@@ -78,10 +79,20 @@
               <line x1="3" y1="18" x2="21" y2="18"></line>
             </svg>
           </button>
-          <div class="active-model-display" id="navModelBtn">
-            <span class="model-name-text" id="navModelName">Loading...</span>
-            <span class="device-pill" id="navDevicePill">GPU</span>
-            <span class="type-pill" id="navTypePill">VLM</span>
+          <div class="model-control-group">
+            <div class="active-model-display" id="navModelBtn" title="Click to configure / load model">
+              <span class="status-dot" id="navStatusDot"></span>
+              <span class="model-name-text" id="navModelName">Select a model to load</span>
+              <span class="device-pill" id="navDevicePill" style="display: none;">GPU</span>
+              <span class="type-pill" id="navTypePill" style="display: none;">VLM</span>
+            </div>
+            <button class="eject-btn" id="navUnloadBtn" title="Eject / Unload model from memory" style="display: none;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="12 4 4 14 20 14 12 4"></polygon>
+                <line x1="4" y1="19" x2="20" y2="19"></line>
+              </svg>
+              <span>Eject</span>
+            </button>
           </div>
         </div>
 
@@ -251,6 +262,13 @@
       </div>
 
       <div class="modal-footer">
+        <button class="btn btn-danger" id="modalUnloadBtn" style="display: none;">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12 4 4 14 20 14 12 4"></polygon>
+            <line x1="4" y1="19" x2="20" y2="19"></line>
+          </svg>
+          <span>Eject / Unload Model</span>
+        </button>
         <button class="btn btn-secondary" id="saveDefaultsBtn">Save as Default</button>
         <button class="btn btn-primary" id="applyAndLoadBtn">
           <span id="loadSpinner" class="spinner" style="display: none;"></span>

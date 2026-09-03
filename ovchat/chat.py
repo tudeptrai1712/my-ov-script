@@ -464,6 +464,10 @@ class Chat:
                         )
                     except Exception as ex:
                         print(f"\n{UI.RED}Failed to load image: {ex}{UI.RESET}\n")
+                else:
+                    print(f"{UI.YELLOW}Usage: /image <path/to/image.jpg>{UI.RESET}")
+                continue
+
             if root_cmd in ("/file", "/doc", "/attach"):
                 if len(parts) > 1:
                     raw_doc_path = " ".join(parts[1:]).strip('\"\'')
@@ -484,10 +488,85 @@ class Chat:
                     except Exception as ex:
                         print(f"\n{UI.RED}Failed to extract file text: {ex}{UI.RESET}\n")
                 else:
-                    print(f"{UI.YELLOW}Usage: /file <path/to/file.pdf, .txt, .py, etc.>{UI.RESET}")
+                    print(f"{UI.YELLOW}Usage: /file <path/to/document.pdf or file.txt>{UI.RESET}")
+                continue
+
+            if root_cmd in ("/unload", "/eject"):
+                self.unload()
+                continue
+
+            if root_cmd == "/load":
+                from .models import find_models
+                from .devices import choose_device
+                from .config import MODEL_ROOT
+                all_models = find_models(MODEL_ROOT)
+                if not all_models:
+                    print(f"{UI.RED}No models found in {MODEL_ROOT}{UI.RESET}")
+                    continue
+                print("\nAvailable Models:")
+                for idx, m in enumerate(all_models, 1):
+                    print(f"  {idx}. {m.name}")
+                sel = input("\nSelect model number: ").strip()
+                if sel.isdigit() and 1 <= int(sel) <= len(all_models):
+                    target_model = all_models[int(sel) - 1]
+                    from .metadata import read_model_metadata
+                    meta = read_model_metadata(target_model)
+                    dev = choose_device(meta)
+                    if dev:
+                        self.load_model(target_model, dev)
+                continue
+
+            if self.pipe is None:
+                print(f"\n{UI.YELLOW}No model is loaded. Type /load to load a model.{UI.RESET}\n")
                 continue
 
             self.generate(prompt)
 
         print(f"{UI.DIM}Chat transcript saved: {self.history_saver.session_file}{UI.RESET}")
+
+    def unload(self) -> None:
+        """Unloads active model and frees VRAM/RAM."""
+        if self.pipe is None:
+            print(f"\n{UI.YELLOW}No model is currently loaded.{UI.RESET}\n")
+            return
+        import gc
+        model_name = self.metadata.name if self.metadata else "model"
+        self.pipe = None
+        self.tokenizer = None
+        self.generation_config = None
+        gc.collect()
+        print(f"\n{UI.GREEN}Model '{model_name}' unloaded from memory. VRAM freed.{UI.RESET}\n")
+
+    def load_model(self, model_path: Path, device: str) -> None:
+        """Loads a model dynamically into active session."""
+        import gc
+        self.pipe = None
+        self.tokenizer = None
+        self.generation_config = None
+        gc.collect()
+
+        from .metadata import read_model_metadata
+        self.model_path = model_path
+        self.metadata = read_model_metadata(model_path)
+        self.device = device
+        self.reasoning_enabled = self.metadata.supports_reasoning
+
+        print(f"{UI.CYAN}Loading {self.metadata.display_type} on {device}...{UI.RESET}")
+        t0 = time.perf_counter()
+        if self.metadata.is_vlm:
+            self.pipe = ov_genai.VLMPipeline(str(model_path), device)
+        else:
+            self.pipe = ov_genai.LLMPipeline(str(model_path), device)
+        self.load_time = time.perf_counter() - t0
+        self.tokenizer = self.pipe.get_tokenizer()
+        self.generation_config = self.pipe.get_generation_config()
+        self.generation_config.max_new_tokens = self.max_new_tokens
+
+        self.history_saver = ChatHistorySaver(
+            model_name=self.metadata.name,
+            device=self.device,
+            context_length=self.context_length,
+            reasoning_enabled=self.reasoning_enabled,
+        )
+        print(f"{UI.GREEN}Loaded '{self.metadata.name}' successfully in {self.load_time:.2f}s.{UI.RESET}\n")
 

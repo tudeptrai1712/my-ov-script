@@ -25,6 +25,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const navDevicePill = document.getElementById('navDevicePill');
   const navTypePill = document.getElementById('navTypePill');
   const navModelBtn = document.getElementById('navModelBtn');
+  const navUnloadBtn = document.getElementById('navUnloadBtn');
+  const navStatusDot = document.getElementById('navStatusDot');
   const reasoningPillBtn = document.getElementById('reasoningPillBtn');
   const reasoningPillState = document.getElementById('reasoningPillState');
   const toggleSidebarBtn = document.getElementById('toggleSidebarBtn');
@@ -34,9 +36,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const sidebarModelName = document.getElementById('sidebarModelName');
   const sidebarDeviceBadge = document.getElementById('sidebarDeviceBadge');
   const sidebarMemory = document.getElementById('sidebarMemory');
+  const sidebarEjectBtn = document.getElementById('sidebarEjectBtn');
+  const sidebarStatusDot = document.getElementById('sidebarStatusDot');
 
   // Settings Modal Elements
   const settingsModal = document.getElementById('settingsModal');
+  const modalUnloadBtn = document.getElementById('modalUnloadBtn');
   const openSettingsBtn = document.getElementById('openSettingsBtn');
   const closeSettingsBtn = document.getElementById('closeSettingsBtn');
   const settingModelSelect = document.getElementById('settingModelSelect');
@@ -172,6 +177,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     saveDefaultsBtn.addEventListener('click', handleSaveDefaults);
     applyAndLoadBtn.addEventListener('click', handleApplyAndLoad);
+
+    // Eject / Unload Model (LM Studio style)
+    if (navUnloadBtn) {
+      navUnloadBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleUnloadModel();
+      });
+    }
+    if (sidebarEjectBtn) {
+      sidebarEjectBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleUnloadModel();
+      });
+    }
+    if (modalUnloadBtn) {
+      modalUnloadBtn.addEventListener('click', handleUnloadModel);
+    }
 
     // Universal File & Image Attachment
     if (attachFileBtn && universalFileInput) {
@@ -437,6 +459,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (data.loaded) {
         state.modelName = data.model_name;
         state.device = data.device;
+        state.isVlm = data.is_vlm;
         state.displayType = data.display_type;
         state.contextLength = data.context_length;
         state.maxNewTokens = data.max_new_tokens;
@@ -445,21 +468,66 @@ document.addEventListener('DOMContentLoaded', () => {
 
         navModelName.textContent = data.model_name;
         navDevicePill.textContent = data.device;
+        navDevicePill.style.display = 'inline-block';
         navTypePill.textContent = data.display_type.includes('VLM') ? 'VLM' : 'LLM';
+        navTypePill.style.display = 'inline-block';
+
+        if (navStatusDot) navStatusDot.className = 'status-dot online';
+        if (sidebarStatusDot) sidebarStatusDot.className = 'status-dot online';
+        if (navUnloadBtn) navUnloadBtn.style.display = 'inline-flex';
+        if (sidebarEjectBtn) sidebarEjectBtn.style.display = 'inline-block';
+        if (modalUnloadBtn) modalUnloadBtn.style.display = 'inline-flex';
 
         sidebarModelName.textContent = data.model_name;
         sidebarDeviceBadge.textContent = data.device;
         sidebarMemory.textContent = data.gpu_memory_human;
 
+        loadBtnText.textContent = 'Reload / Switch Model';
+        chatInput.placeholder = 'Message OpenVINO... (Press Enter to send, paste/drop files or images)';
+
         updateReasoningUI();
       } else {
-        navModelName.textContent = 'Click to Load Model';
+        navModelName.textContent = 'Select a model to load';
+        navDevicePill.style.display = 'none';
+        navTypePill.style.display = 'none';
+
+        if (navStatusDot) navStatusDot.className = 'status-dot';
+        if (sidebarStatusDot) sidebarStatusDot.className = 'status-dot';
+        if (navUnloadBtn) navUnloadBtn.style.display = 'none';
+        if (sidebarEjectBtn) sidebarEjectBtn.style.display = 'none';
+        if (modalUnloadBtn) modalUnloadBtn.style.display = 'none';
+
         sidebarModelName.textContent = 'No Model Loaded';
-        // Auto open settings if no model loaded
-        openSettings();
+        sidebarDeviceBadge.textContent = 'None';
+        sidebarMemory.textContent = data.gpu_memory_human;
+
+        loadBtnText.textContent = 'Apply & Load Model';
+        chatInput.placeholder = 'No model loaded. Click here or select a model above to start chatting.';
+
+        updateReasoningUI();
       }
     } catch (err) {
       console.error('Failed to get status:', err);
+    }
+  }
+
+  async function handleUnloadModel() {
+    try {
+      if (modalUnloadBtn) modalUnloadBtn.disabled = true;
+      if (navUnloadBtn) navUnloadBtn.disabled = true;
+      if (sidebarEjectBtn) sidebarEjectBtn.disabled = true;
+
+      const res = await fetch('/api/model/unload', { method: 'POST' });
+      if (res.ok) {
+        closeSettings();
+        await checkModelStatus();
+      }
+    } catch (err) {
+      console.error('Failed to unload model:', err);
+    } finally {
+      if (modalUnloadBtn) modalUnloadBtn.disabled = false;
+      if (navUnloadBtn) navUnloadBtn.disabled = false;
+      if (sidebarEjectBtn) sidebarEjectBtn.disabled = false;
     }
   }
 
