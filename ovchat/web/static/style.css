@@ -760,6 +760,54 @@ pre code {
   font-family: var(--font-mono);
 }
 
+/* MESSAGE ACTIONS (RETRY & COPY BUTTONS) */
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 6px;
+}
+
+.msg-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.msg-action-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  border-color: #4b4d5a;
+}
+
+.msg-action-btn svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+}
+
+.copy-msg-btn.copied {
+  color: var(--success-color);
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.retry-msg-btn:hover svg {
+  transform: rotate(45deg);
+  transition: transform 0.2s ease;
+}
+
 /* WELCOME SCREEN */
 .welcome-screen {
   max-width: 680px;

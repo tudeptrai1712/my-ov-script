@@ -82,6 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
     historyFiles: [],
     isGenerating: false,
     abortController: null,
+    lastRequestPayload: null,
   };
 
   // ========================================================
@@ -674,8 +675,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    welcomeScreen.style.display = 'none';
-
     // Capture staged attachments
     const currentAttachments = [...state.stagedAttachments];
     clearStagedAttachments();
@@ -687,6 +686,35 @@ document.addEventListener('DOMContentLoaded', () => {
     chatInput.value = '';
     chatInput.style.height = 'auto';
 
+    const images = currentAttachments.filter(a => a.type === 'image');
+    const files = currentAttachments.filter(a => a.type === 'file');
+
+    const payload = {
+      messages: state.messages,
+      enable_reasoning: state.reasoningEnabled,
+      max_new_tokens: state.maxNewTokens,
+      temperature: state.temperature,
+      top_p: state.topP,
+    };
+
+    if (images.length > 0) {
+      payload.images = images.map(a => a.data);
+    }
+    if (files.length > 0) {
+      payload.files = files.map(a => ({
+        filename: a.name,
+        data: a.data,
+        size: a.size,
+      }));
+    }
+
+    state.lastRequestPayload = payload;
+    await executeChatStream(payload);
+  }
+
+  async function executeChatStream(payload) {
+    welcomeScreen.style.display = 'none';
+
     // Prepare assistant bubble
     const aiBubble = appendMessageElement('assistant', '', true);
     setGenerating(true);
@@ -694,28 +722,6 @@ document.addEventListener('DOMContentLoaded', () => {
     state.abortController = new AbortController();
 
     try {
-      const payload = {
-        messages: state.messages,
-        enable_reasoning: state.reasoningEnabled,
-        max_new_tokens: state.maxNewTokens,
-        temperature: state.temperature,
-        top_p: state.topP,
-      };
-
-      const images = currentAttachments.filter(a => a.type === 'image');
-      const files = currentAttachments.filter(a => a.type === 'file');
-
-      if (images.length > 0) {
-        payload.images = images.map(a => a.data);
-      }
-      if (files.length > 0) {
-        payload.files = files.map(a => ({
-          filename: a.name,
-          data: a.data,
-          size: a.size,
-        }));
-      }
-
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -787,15 +793,103 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Save turn locally
       state.messages.push({ role: 'assistant', content: assistantFullText });
+
+      // Add Copy & Retry action buttons to output
+      renderMessageActions(aiBubble, assistantFullText);
+
       await fetchHistory(); // Refresh sidebar history list
     } catch (err) {
       if (err.name !== 'AbortError') {
         updateMessageContent(aiBubble, `<span style="color: var(--danger-color);">Error: ${err.message}</span>`);
+        renderMessageActions(aiBubble, '');
       }
     } finally {
       setGenerating(false);
       state.abortController = null;
     }
+  }
+
+  function renderMessageActions(row, fullText) {
+    const content = row.querySelector('.message-content');
+    if (!content) return;
+
+    let actionsBar = content.querySelector('.message-actions');
+    if (actionsBar) actionsBar.remove();
+
+    actionsBar = document.createElement('div');
+    actionsBar.className = 'message-actions';
+
+    // Copy Button
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'msg-action-btn copy-msg-btn';
+    copyBtn.title = 'Copy response to clipboard';
+    copyBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>
+      <span>Copy</span>
+    `;
+    copyBtn.addEventListener('click', () => {
+      const rawText = fullText || row.querySelector('.text-body')?.innerText || '';
+      const clean = rawText.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+      navigator.clipboard.writeText(clean || rawText).then(() => {
+        const span = copyBtn.querySelector('span');
+        copyBtn.classList.add('copied');
+        if (span) span.textContent = 'Copied!';
+        setTimeout(() => {
+          copyBtn.classList.remove('copied');
+          if (span) span.textContent = 'Copy';
+        }, 2000);
+      });
+    });
+
+    // Retry / Regenerate Button
+    const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
+    retryBtn.className = 'msg-action-btn retry-msg-btn';
+    retryBtn.title = 'Regenerate response';
+    retryBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="23 4 23 10 17 10"></polyline>
+        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+      </svg>
+      <span>Retry</span>
+    `;
+    retryBtn.addEventListener('click', () => {
+      handleRetry(row);
+    });
+
+    actionsBar.appendChild(copyBtn);
+    actionsBar.appendChild(retryBtn);
+    content.appendChild(actionsBar);
+  }
+
+  async function handleRetry(row) {
+    if (state.isGenerating) return;
+
+    // Pop the assistant message if it was already recorded
+    if (state.messages.length > 0 && state.messages[state.messages.length - 1].role === 'assistant') {
+      state.messages.pop();
+    }
+
+    // Remove row from DOM
+    if (row && row.parentNode) {
+      row.remove();
+    }
+
+    // Reconstruct payload
+    const payload = {
+      ...(state.lastRequestPayload || {}),
+      messages: state.messages,
+      enable_reasoning: state.reasoningEnabled,
+      max_new_tokens: state.maxNewTokens,
+      temperature: state.temperature,
+      top_p: state.topP,
+    };
+
+    await executeChatStream(payload);
   }
 
   function handleStopGeneration() {
@@ -1090,10 +1184,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const aiMatch = block.match(/\*\*AI(?: `\[Thinking Mode\]`)?:\*\*\s*\n+([\s\S]*?)(?=> \*Metrics:|\n---|$)/);
 
       if (userMatch) {
-        appendMessageElement('user', userMatch[1].trim());
+        const uText = userMatch[1].trim();
+        state.messages.push({ role: 'user', content: uText });
+        appendMessageElement('user', uText);
       }
       if (aiMatch) {
-        appendMessageElement('assistant', aiMatch[1].trim());
+        const aiText = aiMatch[1].trim();
+        state.messages.push({ role: 'assistant', content: aiText });
+        const aiBubble = appendMessageElement('assistant', aiText);
+        renderMessageActions(aiBubble, aiText);
       }
     });
   }
