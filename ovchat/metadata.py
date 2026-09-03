@@ -155,42 +155,13 @@ def check_device_compatibility(
                 "Vision-Language Models (VLM) are not supported on NPU in OpenVINO GenAI",
             )
 
-        # 2. Check NPU hardware optimization capabilities
-        if core is None:
-            core = ov.Core()
-
-        try:
-            capabilities = core.get_property("NPU", "OPTIMIZATION_CAPABILITIES")
-        except Exception:
-            capabilities = []
-
-        # If model is INT4 and NPU doesn't list INT4 capability
-        if "int4" in metadata.precision and "INT4" not in capabilities:
-            return (
-                False,
-                f"INT4 precision is not supported by NPU compiler (supports: {', '.join(capabilities) or 'FP16/INT8 only'})",
-            )
-
-        # 3. Check NPU platform compiler support
-        try:
-            platform = core.get_property("NPU", "NPU_PLATFORM")
-            if platform == "AUTO_DETECT":
-                arch = core.get_property("NPU", "DEVICE_ARCHITECTURE")
-                if str(arch) in ("5010",):
-                    return (
-                        False,
-                        f"NPU compiler does not support platform 'AUTO_DETECT' for architecture {arch}",
-                    )
-        except Exception:
-            pass
-
-        # 4. Whitelisted architectures for NPU in OpenVINO GenAI
-        npu_supported_architectures = ("llama", "qwen2", "mistral", "phi3")
+        # Whitelisted architectures for NPU in OpenVINO GenAI
+        npu_supported_architectures = ("llama", "qwen", "mistral", "phi", "gemma", "deepseek")
         model_type_lower = metadata.model_type.lower()
         if not any(arch in model_type_lower for arch in npu_supported_architectures):
             return (
                 False,
-                f"Model type '{metadata.model_type}' is not supported on NPU (NPU requires Llama/Qwen2/Mistral/Phi3)",
+                f"Model type '{metadata.model_type}' is not supported on NPU (requires Llama/Qwen/Mistral/Phi/Gemma/DeepSeek)",
             )
 
         return True, None

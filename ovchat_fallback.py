@@ -306,20 +306,9 @@ def check_device_compatibility(
         if metadata.is_vlm:
             return False, "Vision-Language Models (VLM) are not supported on NPU in OpenVINO GenAI"
 
-        if core is None:
-            core = ov.Core()
-
-        try:
-            caps = core.get_property("NPU", "OPTIMIZATION_CAPABILITIES")
-        except Exception:
-            caps = []
-
-        if "int4" in metadata.precision and "INT4" not in caps:
-            return False, "INT4 precision is not supported by NPU compiler"
-
-        npu_supported = ("llama", "qwen2", "mistral", "phi3")
+        npu_supported = ("llama", "qwen", "mistral", "phi", "gemma", "deepseek")
         if not any(arch in metadata.model_type.lower() for arch in npu_supported):
-            return False, f"Model architecture '{metadata.model_type}' is not supported on NPU"
+            return False, f"Model architecture '{metadata.model_type}' is not supported on NPU (requires Llama/Qwen/Mistral/Phi/Gemma/DeepSeek)"
 
         return True, None
 
