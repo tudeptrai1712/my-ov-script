@@ -251,38 +251,6 @@ User defaults are saved automatically in [`user_config.json`](user_config.json).
 
 ---
 
-## Hardware Compatibility & Performance Notes
-
-> [!CAUTION]
-> **Intel Hardware Only**: This project is developed exclusively for Intel hardware platforms and drivers. Non-Intel accelerators are not supported.
-
-- **GPU (Intel Arc & Integrated Graphics)**:
-  - **Supported**: **Intel Alchemist (Xe-HPG / 1st Gen Arc) and newer**, including:
-    - Intel Arc A-Series (A770, A750, A580, A380, A310)
-    - Intel Arc B-Series (Battlemage B580, B570, B390)
-    - Intel Core Ultra Series 1 integrated graphics (Meteor Lake Xe-LPG)
-    - Intel Core Ultra Series 2 integrated graphics (Lunar Lake Xe2-LPG, Arrow Lake)
-  - Supports both **LLMs** and **VLMs** (Vision-Language Models) with hardware XMX/DPAS matrix acceleration.
-  - Older generations (Intel Iris Xe, UHD Graphics) lack necessary FP16/INT4 matrix compute support and are not supported.
-
-- **NPU (Neural Processing Unit)**:
-  - **Supported**: Integrated Intel NPUs on:
-    - **Intel Core Ultra Series 1 and newer** (Meteor Lake, Lunar Lake, Arrow Lake)
-    - **Intel Core Series 3 and newer**
-  - **Model Architecture Constraints**: Supports compatible int4/int8 causal text LLMs (Llama, Qwen, Mistral, Phi-3). Multimodal Vision-Language Models (VLMs) are not supported on NPU by OpenVINO GenAI and will automatically route to GPU or CPU.
-
-- **CPU**:
-  - Universal fallback for all supported models and architectures.
-
-- **Performance Recommendation (CLI vs. Web UI)**:
-  - While the Web UI provides an OpenWebUI/ChatGPT-style experience, SSE network streaming and continuous browser DOM reflows introduce measurable overhead.
-  - For benchmarking or situations requiring the absolute highest generation speed and lowest time-to-first-token (TTFT), run the terminal CLI:
-    ```bash
-    python ovchat.py
-    ```
-
----
-
 ## License
 
 MIT License. Feel free to use and modify for your own local AI workflows!
