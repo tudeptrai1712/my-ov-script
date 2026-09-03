@@ -4,6 +4,7 @@ from typing import Optional
 from .chat import Chat
 from .config import (
     DEFAULT_CONTEXT,
+    DEFAULT_ENABLE_REASONING,
     DEFAULT_MAX_NEW_TOKENS,
     MODEL_ROOT,
 )
@@ -28,6 +29,24 @@ def choose_integer(label: str, default: int, minimum: int = 1) -> int:
             pass
 
         print(f"{UI.YELLOW}Enter an integer >= {minimum}.{UI.RESET}")
+
+
+def choose_boolean(label: str, default: bool = False) -> bool:
+    """Interactively prompts for a boolean yes/no choice."""
+    prompt_suffix = "[Y/n]" if default else "[y/N]"
+    while True:
+        value = input(f"{UI.CYAN}{label} {prompt_suffix}: {UI.RESET}").strip().lower()
+
+        if not value:
+            return default
+
+        if value in ("y", "yes", "true", "1", "on"):
+            return True
+
+        if value in ("n", "no", "false", "0", "off"):
+            return False
+
+        print(f"{UI.YELLOW}Enter 'y' for yes or 'n' for no.{UI.RESET}")
 
 
 def main() -> None:
@@ -69,22 +88,32 @@ def main() -> None:
 
     print()
 
-    # 5. Configuration summary
+    # 5. Reasoning mode
+    enable_reasoning = choose_boolean(
+        "Enable reasoning / thinking mode?",
+        default=DEFAULT_ENABLE_REASONING,
+    )
+
+    print()
+
+    # 6. Configuration summary
     print(f"{UI.BOLD}Configuration{UI.RESET}")
-    print(f"  Model   : {model_path.name}")
-    print(f"  Context : {context_length:,}")
-    print(f"  Output  : {max_new_tokens:,}")
-    print(f"  Device  : {device}\n")
+    print(f"  Model    : {model_path.name}")
+    print(f"  Context  : {context_length:,}")
+    print(f"  Output   : {max_new_tokens:,}")
+    print(f"  Device   : {device}")
+    print(f"  Reasoning: {'Enabled' if enable_reasoning else 'Disabled'}\n")
 
     input("Press Enter to load...")
 
-    # 6. Initialize pipeline & chat session
+    # 7. Initialize pipeline & chat session
     try:
         chat = Chat(
             model_path=model_path,
             device=device,
             context_length=context_length,
             max_new_tokens=max_new_tokens,
+            enable_reasoning=enable_reasoning,
         )
     except Exception as e:
         print(f"\n{UI.RED}Failed to load model:{UI.RESET}\n")
@@ -92,22 +121,24 @@ def main() -> None:
         input("\nPress Enter...")
         return
 
-    # 7. Chat loop
+    # 8. Chat loop
     clear_screen()
     print(f"{UI.BOLD}{UI.GREEN}OpenVINO model loaded.{UI.RESET}\n")
-    print(f"Model : {model_path.name}")
-    print(f"Device: {device}")
-    print(f"Context: {context_length:,}")
+    print(f"Model    : {model_path.name}")
+    print(f"Device   : {device}")
+    print(f"Reasoning: {'Enabled' if enable_reasoning else 'Disabled'}")
+    print(f"Context  : {context_length:,}")
     print(f"Max output: {max_new_tokens:,}\n")
 
     print(f"{UI.DIM}Commands:{UI.RESET}")
     print("  /clear  - clear conversation")
     print("  /info   - show model/memory info")
+    print("  /think  - toggle reasoning mode (or /think on, /think off)")
     print("  /quit   - exit\n")
 
     chat.run()
 
-    # 8. Clean shutdown
+    # 9. Clean shutdown
     chat.memory_monitor.stop()
     print(f"\n{UI.GREEN}Goodbye.{UI.RESET}")
 

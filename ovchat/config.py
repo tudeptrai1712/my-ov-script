@@ -19,3 +19,8 @@ RUNTIME_OVERHEAD_GB: float = 0.75
 # Memory polling frequency (in seconds)
 MEMORY_POLL_INTERVAL: float = 0.25
 
+# Default reasoning / thinking mode state
+DEFAULT_ENABLE_REASONING: bool = os.environ.get(
+    "OVCHAT_ENABLE_REASONING", ""
+).strip().lower() in ("1", "true", "yes")
+

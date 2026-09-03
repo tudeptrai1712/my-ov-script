@@ -36,11 +36,13 @@ class Chat:
         device: str,
         context_length: int,
         max_new_tokens: int,
+        enable_reasoning: bool = False,
     ):
         self.model_path = model_path
         self.device = device
         self.context_length = context_length
         self.max_new_tokens = max_new_tokens
+        self.reasoning_enabled = enable_reasoning
 
         # ----------------------------------------------------
         # Memory monitoring
@@ -145,6 +147,7 @@ class Chat:
             prompt = self.tokenizer.apply_chat_template(
                 self.chat_history,
                 True,
+                extra_context={"enable_thinking": self.reasoning_enabled},
             )
             encoded = self.tokenizer.encode(prompt)
             shape = encoded.input_ids.get_shape()
@@ -181,14 +184,32 @@ class Chat:
         self.chat_history = ov_genai.ChatHistory()
         print(f"\n{UI.GREEN}Conversation cleared.{UI.RESET}\n")
 
+    def toggle_reasoning(self, enable: Optional[bool] = None) -> bool:
+        """Toggles or sets the reasoning/thinking mode state."""
+        if enable is None:
+            self.reasoning_enabled = not self.reasoning_enabled
+        else:
+            self.reasoning_enabled = bool(enable)
+
+        state_str = "enabled" if self.reasoning_enabled else "disabled"
+        color = UI.GREEN if self.reasoning_enabled else UI.YELLOW
+        print(f"\n{color}Reasoning mode {state_str}.{UI.RESET}\n")
+        return self.reasoning_enabled
+
     def info(self) -> None:
         """Prints current session and memory statistics."""
         used = self.context_usage()
         current_memory = self.memory_monitor.current
+        reason_status = (
+            f"{UI.GREEN}Enabled{UI.RESET}"
+            if self.reasoning_enabled
+            else f"{UI.YELLOW}Disabled{UI.RESET}"
+        )
 
         print()
         print(f"{UI.BOLD}Model:{UI.RESET} {self.model_path.name}")
         print(f"{UI.BOLD}Device:{UI.RESET} {self.device}")
+        print(f"{UI.BOLD}Reasoning:{UI.RESET} {reason_status}")
         print(f"{UI.BOLD}Context:{UI.RESET} {used:,} / {self.context_length:,}")
         print(f"{UI.BOLD}Max output:{UI.RESET} {self.max_new_tokens:,}")
         print(f"{UI.BOLD}Load time:{UI.RESET} {self.load_time:.2f}s")
@@ -215,7 +236,11 @@ class Chat:
         self.trim_context()
 
         # Streaming setup
-        print(f"\n{UI.BOLD}{UI.GREEN}AI:{UI.RESET} ", end="", flush=True)
+        if self.reasoning_enabled:
+            print(f"\n{UI.BOLD}{UI.GREEN}AI {UI.MAGENTA}[thinking]{UI.RESET}: ", end="", flush=True)
+        else:
+            print(f"\n{UI.BOLD}{UI.GREEN}AI:{UI.RESET} ", end="", flush=True)
+
         generated_chunks: List[str] = []
 
         def streamer(text: str) -> bool:
@@ -230,6 +255,7 @@ class Chat:
                 self.chat_history,
                 generation_config=self.generation_config,
                 streamer=streamer,
+                extra_context={"enable_thinking": self.reasoning_enabled},
             )
         except Exception as e:
             print(f"\n\n{UI.RED}Generation error:{UI.RESET} {e}\n")
@@ -314,15 +340,31 @@ class Chat:
                 continue
 
             command = prompt.lower()
-            if command in ("/quit", "/exit", "/q"):
+            parts = command.split()
+            root_cmd = parts[0]
+
+            if root_cmd in ("/quit", "/exit", "/q"):
                 break
 
-            if command == "/clear":
+            if root_cmd == "/clear":
                 self.clear()
                 continue
 
-            if command == "/info":
+            if root_cmd == "/info":
                 self.info()
+                continue
+
+            if root_cmd in ("/think", "/reason", "/reasoning"):
+                if len(parts) > 1:
+                    arg = parts[1]
+                    if arg in ("on", "1", "true", "enable", "yes"):
+                        self.toggle_reasoning(True)
+                    elif arg in ("off", "0", "false", "disable", "no"):
+                        self.toggle_reasoning(False)
+                    else:
+                        print(f"{UI.YELLOW}Usage: /think [on|off]{UI.RESET}")
+                else:
+                    self.toggle_reasoning()
                 continue
 
             self.generate(prompt)
