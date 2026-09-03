@@ -31,6 +31,7 @@ if __name__ == "__main__":
 
     # 2. Launch requested interface
     if "--server" in sys.argv or "--api" in sys.argv:
+        sys.argv = [a for a in sys.argv if a not in ("--server", "--api")]
         from run_server import main as run_server_main
         run_server_main()
     elif "--web" in sys.argv:

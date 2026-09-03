@@ -537,18 +537,41 @@ def create_app() -> FastAPI:
     # ========================================================
 
     @app.get("/v1/models")
+    @app.get("/v1/models")
     @app.get("/models")
     async def openai_list_models():
         settings = load_settings()
         root = Path(settings.get("model_root", MODEL_ROOT))
         models = find_models(root)
 
+        now_ts = int(time.time())
         model_objects = []
         for m in models:
+            # Default entry (uses configured default device)
             model_objects.append({
                 "id": m.name,
                 "object": "model",
-                "created": int(time.time()),
+                "created": now_ts,
+                "owned_by": "openvino",
+                "permission": [],
+                "root": m.name,
+                "parent": None,
+            })
+            # Explicit GPU entry
+            model_objects.append({
+                "id": f"{m.name} (GPU)",
+                "object": "model",
+                "created": now_ts,
+                "owned_by": "openvino",
+                "permission": [],
+                "root": m.name,
+                "parent": None,
+            })
+            # Explicit CPU entry
+            model_objects.append({
+                "id": f"{m.name} (CPU)",
+                "object": "model",
+                "created": now_ts,
                 "owned_by": "openvino",
                 "permission": [],
                 "root": m.name,
@@ -561,7 +584,14 @@ def create_app() -> FastAPI:
         settings = load_settings()
         root = Path(settings.get("model_root", MODEL_ROOT))
         models = [m.name for m in find_models(root)]
-        if model_id not in models:
+
+        clean_name = model_id
+        for suffix in (" (GPU)", " (CPU)", ":GPU", ":CPU", "/gpu", "/cpu"):
+            if clean_name.endswith(suffix):
+                clean_name = clean_name[:-len(suffix)].strip()
+                break
+
+        if clean_name not in models:
             raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
         return {
             "id": model_id,
@@ -586,16 +616,35 @@ def create_app() -> FastAPI:
         root = Path(settings.get("model_root", MODEL_ROOT))
         available_models = [m.name for m in find_models(root)]
 
-        if not req_model and available_models:
-            req_model = available_models[0]
+        # Extract device target from model name if present
+        target_dev = None
+        clean_model_name = req_model or ""
 
-        if req_model and req_model in available_models:
-            # Auto-load or switch model if needed
-            if not session.is_loaded() or session.model_name != req_model:
-                dev = settings.get("selected_device", "GPU")
+        for suffix, dev_val in [
+            (" (GPU)", "GPU"),
+            (" (CPU)", "CPU"),
+            (":GPU", "GPU"),
+            (":CPU", "CPU"),
+            ("/gpu", "GPU"),
+            ("/cpu", "CPU"),
+        ]:
+            if clean_model_name.endswith(suffix):
+                target_dev = dev_val
+                clean_model_name = clean_model_name[:-len(suffix)].strip()
+                break
+
+        if not target_dev:
+            target_dev = settings.get("selected_device", "GPU")
+
+        if not clean_model_name and available_models:
+            clean_model_name = available_models[0]
+
+        if clean_model_name and clean_model_name in available_models:
+            # Auto-load or switch model/device if needed
+            if not session.is_loaded() or session.model_name != clean_model_name or session.device != target_dev:
                 await load_model(LoadModelRequest(
-                    model_name=req_model,
-                    device=dev,
+                    model_name=clean_model_name,
+                    device=target_dev,
                     temperature=temperature,
                     top_p=top_p,
                     max_new_tokens=max_tokens,

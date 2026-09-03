@@ -144,12 +144,19 @@ Start the high-performance local server:
 python run_server.py --port 8000
 # or using the main runner:
 python ovchat.py --server
+
+# Optional flags:
+python run_server.py --device CPU        # Force CPU inference
+python run_server.py --device GPU        # Force Intel Arc GPU inference
+python run_server.py -y                  # Skip parameter confirmation prompt
+python run_server.py --kill              # Stop running server
 ```
 
+- **Load Parameter Confirmation**: When launched interactively, the server displays current parameters (Device, Context Length, Max Tokens, Temperature, Top-P, Reasoning) and lets you change them before startup.
 - **OpenAI API Base URL**: `http://127.0.0.1:8000/v1`
-- **Models List Endpoint**: `http://127.0.0.1:8000/v1/models`
+- **Models List Endpoint**: `http://127.0.0.1:8000/v1/models` (exposes both default, `(GPU)`, and `(CPU)` model entries for selection in Open WebUI)
 - **Chat Completions**: `http://127.0.0.1:8000/v1/chat/completions`
-- **To stop the server**: Type `q` or `kill` + `Enter` in the console, or run `python run_server.py --kill`.
+- **To stop the server**: Press `q` or `k` in console, type `quit`, or run `python kill_server.py`.
 
 ---
 
