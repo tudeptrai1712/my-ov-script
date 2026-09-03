@@ -18,15 +18,6 @@ if __name__ == "__main__":
         print_dependency_status()
         sys.exit(0)
 
-    if "--kill-web" in sys.argv or "--stop-web" in sys.argv:
-        from run_web import kill_web_server
-        port = 8080
-        for i, arg in enumerate(sys.argv):
-            if arg == "--port" and i + 1 < len(sys.argv):
-                port = int(sys.argv[i + 1])
-        kill_web_server(port)
-        sys.exit(0)
-
     # Ensure all required packages are present before running
     ok, missing = verify_dependencies(auto_install=True)
     if not ok:

@@ -1,8 +1,16 @@
 # OpenVINO GenAI Chat & Web UI
 
-A high-performance local AI chat suite powered by **Intel OpenVINO GenAI**, featuring dual **LLM** (Text) and **VLM** (Vision-Language) multimodal support, an **OpenWebUI / LM Studio** inspired web interface, real-time streaming, interactive terminal CLI, and an offline-first architecture.
+A high-performance local AI chat suite and custom frontend for [**OpenVINO GenAI (`openvinotoolkit/openvino.genai`)**](https://github.com/openvinotoolkit/openvino.genai), featuring dual **LLM** (Text) and **VLM** (Vision-Language) multimodal support, an **OpenWebUI / LM Studio** inspired web interface, real-time streaming, interactive terminal CLI, and an offline-first architecture.
 
----
+> [!WARNING]
+> **Performance Notice (Web UI vs. CLI)**:
+> The Web UI provides a rich graphical experience, but browser DOM updates, markdown rendering, and Server-Sent Events (SSE) streaming overhead might not yield expected peak generation performance. For the fastest inference speeds, maximum token generation throughput (tokens/second), and minimal latency, **use the interactive CLI instead (`python ovchat.py`)**.
+
+> [!IMPORTANT]
+> **Intel Hardware Requirements (Intel Hardware Only)**:
+> This application is specifically tailored for Intel hardware architectures:
+> - **GPU**: Requires **Intel Alchemist (1st Gen Arc / Xe-HPG) or newer** (including Battlemage B-series, Meteor Lake Xe-LPG, and Lunar Lake / Arrow Lake Xe2). Older graphics generations (Intel UHD, early Iris Xe) lack the required Matrix/DPAS instructions and will either run slowly or fail compilation.
+> - **NPU**: Requires an integrated Intel Neural Processing Unit on **Intel Core Ultra Series 1 (Meteor Lake) and newer**, or **Intel Core Series 3 and newer**. Note that in OpenVINO GenAI, VLMs (vision-language models) require GPU or CPU; the NPU is supported for compatible text-only causal LLMs.
 
 ## Key Features
 
@@ -31,15 +39,13 @@ A high-performance local AI chat suite powered by **Intel OpenVINO GenAI**, feat
   - **Copy**: One-click clipboard copy of clean output (internal reasoning tokens automatically filtered).
   - **Retry**: Regenerate any turn on the fly with the original prompt, attachments, and configuration.
 
-- **Real-Time Hardware & System Telemetry**:
-  - Monitors **CPU** utilization and **System RAM** in real time.
-  - Monitors **GPU Compute**, **Intel Arc XMX (Xe Matrix Extensions) / Neural Engine**, **GPU 3D Engine**, and **Dedicated & Shared VRAM**.
-  - Visualized via real-time responsive progress bars in the sidebar and a glanceable top-navigation telemetry pill.
-  - Built with microsecond C-level `psutil` and Windows Performance Data Helper (`pdh.dll`) via `ctypes`.
+- **Real-Time Hardware Telemetry**:
+  - Continuous sampling of **CPU**, **RAM**, **GPU Compute**, **Intel Arc XMX / Neural Engine**, **GPU 3D Engine**, and **Dedicated / Shared VRAM**.
+  - Visualized via real-time progress bars in the sidebar and a compact glanceable top-nav telemetry pill.
 
-- **Console Kill & Web Server Management**:
-  - Stop the web server anytime in the terminal by typing `q`, `quit`, `k`, or `kill` + `Enter`.
-  - Kill running instances from any shell via `python run_web.py --kill` or `python ovchat.py --kill-web`.
+- **Console Web UI Kill & Stop Controls**:
+  - Type `q`, `quit`, `k`, or `kill` + `Enter` in the console to gracefully stop the web server.
+  - Kill running instances from any terminal via `python run_web.py --kill` or `python ovchat.py --kill-web`.
 
 - **Reasoning / Thinking Mode (`/think`)**:
   - Native support for reasoning models (Gemma 4, DeepSeek, etc.).
@@ -245,17 +251,35 @@ User defaults are saved automatically in [`user_config.json`](user_config.json).
 
 ---
 
-## Hardware Compatibility Notes
+## Hardware Compatibility & Performance Notes
+
+> [!CAUTION]
+> **Intel Hardware Only**: This project is developed exclusively for Intel hardware platforms and drivers. Non-Intel accelerators are not supported.
 
 - **GPU (Intel Arc & Integrated Graphics)**:
-  - Supports both **LLMs** and **VLMs** (Vision-Language Models).
-  - Recommended for highest throughput and lowest latency.
-- **CPU**:
-  - Universal fallback for all models and architectures.
+  - **Supported**: **Intel Alchemist (Xe-HPG / 1st Gen Arc) and newer**, including:
+    - Intel Arc A-Series (A770, A750, A580, A380, A310)
+    - Intel Arc B-Series (Battlemage B580, B570, B390)
+    - Intel Core Ultra Series 1 integrated graphics (Meteor Lake Xe-LPG)
+    - Intel Core Ultra Series 2 integrated graphics (Lunar Lake Xe2-LPG, Arrow Lake)
+  - Supports both **LLMs** and **VLMs** (Vision-Language Models) with hardware XMX/DPAS matrix acceleration.
+  - Older generations (Intel Iris Xe, UHD Graphics) lack necessary FP16/INT4 matrix compute support and are not supported.
+
 - **NPU (Neural Processing Unit)**:
-  - In OpenVINO GenAI, `VLMPipeline` is restricted to `GPU` and `CPU`. Attempting to run a VLM on NPU will result in compiler platform errors (`0x78000004`).
-  - Supported for compatible text-only LLMs (e.g. Llama, Qwen2, Mistral, Phi-3).
-  - The application automatically disables the NPU option in the UI when a VLM is selected.
+  - **Supported**: Integrated Intel NPUs on:
+    - **Intel Core Ultra Series 1 and newer** (Meteor Lake, Lunar Lake, Arrow Lake)
+    - **Intel Core Series 3 and newer**
+  - **Model Architecture Constraints**: Supports compatible int4/int8 causal text LLMs (Llama, Qwen, Mistral, Phi-3). Multimodal Vision-Language Models (VLMs) are not supported on NPU by OpenVINO GenAI and will automatically route to GPU or CPU.
+
+- **CPU**:
+  - Universal fallback for all supported models and architectures.
+
+- **Performance Recommendation (CLI vs. Web UI)**:
+  - While the Web UI provides an OpenWebUI/ChatGPT-style experience, SSE network streaming and continuous browser DOM reflows introduce measurable overhead.
+  - For benchmarking or situations requiring the absolute highest generation speed and lowest time-to-first-token (TTFT), run the terminal CLI:
+    ```bash
+    python ovchat.py
+    ```
 
 ---
 

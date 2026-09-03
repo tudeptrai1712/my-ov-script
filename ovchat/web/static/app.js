@@ -93,11 +93,10 @@ document.addEventListener('DOMContentLoaded', () => {
     setupEventListeners();
     await loadSettingsData();
     await fetchModels();
+    await checkModelStatus();
     await fetchHistory();
 
-    // Hardware & System Telemetry Polling (CPU, RAM, GPU Compute, XMX Engine, VRAM)
-    updateSystemMetrics();
-    setInterval(updateSystemMetrics, 1500);
+    // Auto-poll GPU memory
     setInterval(updateMemoryWidget, 3000);
   }
 
@@ -531,64 +530,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (navUnloadBtn) navUnloadBtn.disabled = false;
       if (sidebarEjectBtn) sidebarEjectBtn.disabled = false;
     }
-  }
-
-  async function updateSystemMetrics() {
-    try {
-      const res = await fetch('/api/system/metrics');
-      if (!res.ok) return;
-      const d = await res.json();
-
-      // Top nav quick badge
-      const navCpu = document.getElementById('navCpuPct');
-      const navRam = document.getElementById('navRamPct');
-      const navGpu = document.getElementById('navGpuPct');
-      const navXmx = document.getElementById('navXmxPct');
-
-      if (navCpu) navCpu.textContent = `${d.cpu_percent}%`;
-      if (navRam) navRam.textContent = `${d.ram_percent}%`;
-      if (navGpu) navGpu.textContent = `${d.gpu_total_percent}%`;
-      if (navXmx) navXmx.textContent = `${d.gpu_xmx_percent}%`;
-
-      // Sidebar full telemetry widget
-      const gpuName = document.getElementById('sysmonGpuName');
-      if (gpuName && d.gpu_name) gpuName.textContent = d.gpu_name;
-
-      const cpuVal = document.getElementById('sysmonCpuVal');
-      const cpuBar = document.getElementById('sysmonCpuBar');
-      if (cpuVal) cpuVal.textContent = `${d.cpu_percent}%`;
-      if (cpuBar) cpuBar.style.width = `${Math.min(100, d.cpu_percent)}%`;
-
-      const ramVal = document.getElementById('sysmonRamVal');
-      const ramBar = document.getElementById('sysmonRamBar');
-      if (ramVal) ramVal.textContent = `${d.ram_used_gb} / ${d.ram_total_gb} GB (${d.ram_percent}%)`;
-      if (ramBar) ramBar.style.width = `${Math.min(100, d.ram_percent)}%`;
-
-      const computeVal = document.getElementById('sysmonGpuComputeVal');
-      const computeBar = document.getElementById('sysmonGpuComputeBar');
-      if (computeVal) computeVal.textContent = `${d.gpu_compute_percent}%`;
-      if (computeBar) computeBar.style.width = `${Math.min(100, d.gpu_compute_percent)}%`;
-
-      const xmxVal = document.getElementById('sysmonGpuXmxVal');
-      const xmxBar = document.getElementById('sysmonGpuXmxBar');
-      if (xmxVal) xmxVal.textContent = `${d.gpu_xmx_percent}%`;
-      if (xmxBar) xmxBar.style.width = `${Math.min(100, d.gpu_xmx_percent)}%`;
-
-      const gpu3dVal = document.getElementById('sysmonGpu3dVal');
-      const gpu3dBar = document.getElementById('sysmonGpu3dBar');
-      if (gpu3dVal) gpu3dVal.textContent = `${d.gpu_3d_percent}%`;
-      if (gpu3dBar) gpu3dBar.style.width = `${Math.min(100, d.gpu_3d_percent)}%`;
-
-      const vramDedVal = document.getElementById('sysmonVramDedVal');
-      const vramDedBar = document.getElementById('sysmonVramDedBar');
-      if (vramDedVal) vramDedVal.textContent = `${d.vram_dedicated_used_gb} / ${d.vram_dedicated_total_gb} GB (${d.vram_dedicated_percent}%)`;
-      if (vramDedBar) vramDedBar.style.width = `${Math.min(100, d.vram_dedicated_percent)}%`;
-
-      const vramSharedVal = document.getElementById('sysmonVramSharedVal');
-      const vramSharedBar = document.getElementById('sysmonVramSharedBar');
-      if (vramSharedVal) vramSharedVal.textContent = `${d.vram_shared_used_gb} / ${d.vram_shared_total_gb} GB (${d.vram_shared_percent}%)`;
-      if (vramSharedBar) vramSharedBar.style.width = `${Math.min(100, d.vram_shared_percent)}%`;
-    } catch (_) {}
   }
 
   async function updateMemoryWidget() {

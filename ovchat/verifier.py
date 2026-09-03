@@ -59,12 +59,6 @@ REQUIRED_DEPENDENCIES: List[Dict[str, str]] = [
         "module": "httpx",
         "description": "HTTP Client for Web/API Streaming",
     },
-    {
-        "name": "psutil",
-        "package": "psutil>=5.9.0",
-        "module": "psutil",
-        "description": "CPU & System Memory Telemetry",
-    },
 ]
 
 
