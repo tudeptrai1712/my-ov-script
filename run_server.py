@@ -21,9 +21,28 @@ import threading
 from ovchat.verifier import print_dependency_status, verify_dependencies
 
 
+import time
+
+
 def find_pids_on_port(port: int) -> list:
     """Finds all process IDs listening on the given port."""
     if os.name == "nt":
+        # Fast Windows netstat scan
+        try:
+            res = subprocess.run(f"netstat -ano | findstr :{port}", shell=True, capture_output=True, text=True, timeout=3)
+            pids = set()
+            for line in res.stdout.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 4 and parts[1].endswith(f":{port}"):
+                    last_col = parts[-1]
+                    if last_col.isdigit() and int(last_col) > 0:
+                        pids.add(int(last_col))
+            if pids:
+                return list(pids)
+        except Exception:
+            pass
+
+        # Fallback to PowerShell Get-NetTCPConnection
         cmd = f"Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess"
         try:
             res = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=5)
@@ -66,7 +85,23 @@ def kill_server_on_port(port: int = 8000) -> bool:
 
 
 def console_listener(server):
-    """Listens for console input commands like 'q' or 'kill' to stop the server."""
+    """Listens for keyboard input (q, kill, exit, Ctrl+C) to cleanly stop the server."""
+    if os.name == "nt":
+        try:
+            import msvcrt
+            while not server.should_exit:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getch()
+                    if ch in (b'q', b'Q', b'k', b'K', b'x', b'X', b'\x03'):
+                        print(f"\n[API Server] Stop key '{ch.decode('latin-1', errors='ignore')}' pressed. Shutting down server...\n")
+                        server.should_exit = True
+                        break
+                time.sleep(0.1)
+            return
+        except Exception:
+            pass
+
+    # Standard stream fallback
     while not server.should_exit:
         try:
             line = sys.stdin.readline()

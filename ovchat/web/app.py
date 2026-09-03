@@ -8,6 +8,7 @@ import queue
 import re
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -530,6 +531,270 @@ def create_app() -> FastAPI:
                     break
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    # ========================================================
+    # OPENAI-COMPATIBLE API (For Open WebUI & External Tools)
+    # ========================================================
+
+    @app.get("/v1/models")
+    @app.get("/models")
+    async def openai_list_models():
+        settings = load_settings()
+        root = Path(settings.get("model_root", MODEL_ROOT))
+        models = find_models(root)
+
+        model_objects = []
+        for m in models:
+            model_objects.append({
+                "id": m.name,
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "openvino",
+                "permission": [],
+                "root": m.name,
+                "parent": None,
+            })
+        return {"object": "list", "data": model_objects}
+
+    @app.get("/v1/models/{model_id:path}")
+    async def openai_get_model(model_id: str):
+        settings = load_settings()
+        root = Path(settings.get("model_root", MODEL_ROOT))
+        models = [m.name for m in find_models(root)]
+        if model_id not in models:
+            raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
+        return {
+            "id": model_id,
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "openvino",
+            "permission": [],
+        }
+
+    @app.post("/v1/chat/completions")
+    @app.post("/chat/completions")
+    async def openai_chat_completions(request: Request):
+        body = await request.json()
+        req_model = body.get("model")
+        messages = body.get("messages", [])
+        stream = body.get("stream", False)
+        temperature = body.get("temperature", 0.7)
+        top_p = body.get("top_p", 0.95)
+        max_tokens = body.get("max_tokens") or body.get("max_completion_tokens") or DEFAULT_MAX_NEW_TOKENS
+
+        settings = load_settings()
+        root = Path(settings.get("model_root", MODEL_ROOT))
+        available_models = [m.name for m in find_models(root)]
+
+        if not req_model and available_models:
+            req_model = available_models[0]
+
+        if req_model and req_model in available_models:
+            # Auto-load or switch model if needed
+            if not session.is_loaded() or session.model_name != req_model:
+                dev = settings.get("selected_device", "GPU")
+                await load_model(LoadModelRequest(
+                    model_name=req_model,
+                    device=dev,
+                    temperature=temperature,
+                    top_p=top_p,
+                    max_new_tokens=max_tokens,
+                ))
+
+        if not session.is_loaded():
+            raise HTTPException(status_code=400, detail="No model loaded and could not resolve model.")
+
+        # Process messages and multimodal images
+        image_tensors: List[ov.Tensor] = []
+        parsed_history = []
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            raw_content = msg.get("content", "")
+
+            text_parts = []
+            if isinstance(raw_content, str):
+                text_parts.append(raw_content)
+            elif isinstance(raw_content, list):
+                for part in raw_content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            text_parts.append(part.get("text", ""))
+                        elif part.get("type") == "image_url":
+                            img_url = part.get("image_url", {}).get("url", "")
+                            if img_url and session.metadata and session.metadata.is_vlm:
+                                import numpy as np
+                                from PIL import Image
+                                try:
+                                    if "," in img_url:
+                                        _, b64data = img_url.split(",", 1)
+                                    else:
+                                        b64data = img_url
+                                    raw_bytes = base64.b64decode(b64data)
+                                    pil_img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+                                    arr = np.array(pil_img)
+                                    image_tensors.append(ov.Tensor(arr))
+                                except Exception as e:
+                                    print("Failed to decode OpenAI image_url:", e)
+
+            combined_text = "\n".join(text_parts).strip()
+            parsed_history.append({"role": role, "content": combined_text})
+
+        chat_hist = ov_genai.ChatHistory()
+        for m in parsed_history:
+            chat_hist.append({"role": m["role"], "content": m["content"]})
+
+        completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        created_ts = int(time.time())
+
+        if stream:
+            q = queue.Queue()
+
+            def streamer_callback(chunk: str) -> bool:
+                q.put(chunk)
+                return False
+
+            def worker():
+                try:
+                    gen_cfg = session.pipe.get_generation_config()
+                    if max_tokens:
+                        gen_cfg.max_new_tokens = max_tokens
+                    if hasattr(gen_cfg, "temperature"):
+                        gen_cfg.temperature = temperature
+                    if hasattr(gen_cfg, "top_p"):
+                        gen_cfg.top_p = top_p
+
+                    extra_ctx = {"enable_thinking": session.reasoning_enabled}
+                    if session.metadata and session.metadata.is_vlm:
+                        session.pipe.generate(chat_hist, images=image_tensors, generation_config=gen_cfg, streamer=streamer_callback)
+                    else:
+                        session.pipe.generate(chat_hist, generation_config=gen_cfg, streamer=streamer_callback, extra_context=extra_ctx)
+                except Exception as ex:
+                    q.put(ex)
+                finally:
+                    q.put(None)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+            async def event_generator():
+                # Initial role chunk
+                init_chunk = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created_ts,
+                    "model": session.model_name,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": ""},
+                        "finish_reason": None
+                    }]
+                }
+                yield f"data: {json.dumps(init_chunk)}\n\n"
+
+                while True:
+                    await asyncio.sleep(0.005)
+                    try:
+                        item = q.get_nowait()
+                    except queue.Empty:
+                        continue
+
+                    if item is None:
+                        # Final stop chunk
+                        stop_chunk = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_ts,
+                            "model": session.model_name,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "stop"
+                            }]
+                        }
+                        yield f"data: {json.dumps(stop_chunk)}\n\n"
+                        yield "data: [DONE]\n\n"
+                        break
+                    elif isinstance(item, Exception):
+                        err_chunk = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_ts,
+                            "model": session.model_name,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {"content": f"\n[Error: {str(item)}]"},
+                                "finish_reason": "error"
+                            }]
+                        }
+                        yield f"data: {json.dumps(err_chunk)}\n\n"
+                        yield "data: [DONE]\n\n"
+                        break
+                    else:
+                        chunk_obj = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_ts,
+                            "model": session.model_name,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {"content": item},
+                                "finish_reason": None
+                            }]
+                        }
+                        yield f"data: {json.dumps(chunk_obj)}\n\n"
+
+            return StreamingResponse(
+                event_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"
+                }
+            )
+        else:
+            # Non-streaming call
+            collected_text = []
+            def collect_streamer(chunk: str) -> bool:
+                collected_text.append(chunk)
+                return False
+
+            def non_stream_worker():
+                gen_cfg = session.pipe.get_generation_config()
+                if max_tokens:
+                    gen_cfg.max_new_tokens = max_tokens
+                if hasattr(gen_cfg, "temperature"):
+                    gen_cfg.temperature = temperature
+                if hasattr(gen_cfg, "top_p"):
+                    gen_cfg.top_p = top_p
+                extra_ctx = {"enable_thinking": session.reasoning_enabled}
+                if session.metadata and session.metadata.is_vlm:
+                    session.pipe.generate(chat_hist, images=image_tensors, generation_config=gen_cfg, streamer=collect_streamer)
+                else:
+                    session.pipe.generate(chat_hist, generation_config=gen_cfg, streamer=collect_streamer, extra_context=extra_ctx)
+
+            await asyncio.to_thread(non_stream_worker)
+            full_reply = "".join(collected_text)
+
+            return {
+                "id": completion_id,
+                "object": "chat.completion",
+                "created": created_ts,
+                "model": session.model_name,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": full_reply
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": len(str(parsed_history)) // 4,
+                    "completion_tokens": len(full_reply) // 4,
+                    "total_tokens": (len(str(parsed_history)) + len(full_reply)) // 4
+                }
+            }
 
     return app
 

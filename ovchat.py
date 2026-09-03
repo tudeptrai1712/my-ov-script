@@ -24,13 +24,9 @@ if __name__ == "__main__":
         print(f"\n[Dependency Verifier] Could not resolve: {missing}. Please install manually.\n")
         sys.exit(1)
 
-    if "--kill-server" in sys.argv or "--stop-server" in sys.argv:
-        from run_server import kill_server_on_port
-        port = 8000
-        for i, arg in enumerate(sys.argv):
-            if arg == "--port" and i + 1 < len(sys.argv):
-                port = int(sys.argv[i + 1])
-        kill_server_on_port(port)
+    if any(k in sys.argv for k in ("--kill", "--stop", "--kill-server", "--stop-server", "--kill-web")):
+        from kill_server import main as kill_main
+        kill_main()
         sys.exit(0)
 
     # 2. Launch requested interface
