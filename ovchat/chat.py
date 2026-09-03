@@ -141,6 +141,10 @@ class Chat:
         else:
             self.actual_memory_increase = None
 
+        # Multimodal image state (for VLM models)
+        self.pending_image: Optional[ov.Tensor] = None
+        self.pending_image_path: Optional[str] = None
+
     def rebuild_history(self) -> None:
         """Reconstructs ov_genai.ChatHistory from our tracked messages."""
         self.chat_history = ov_genai.ChatHistory()
@@ -281,12 +285,19 @@ class Chat:
             return False
 
         try:
-            # IMPORTANT: ChatHistory is passed directly as the input.
+            kwargs = {
+                "generation_config": self.generation_config,
+                "streamer": streamer,
+                "extra_context": {"enable_thinking": self.reasoning_enabled},
+            }
+            if self.metadata.is_vlm and self.pending_image is not None:
+                kwargs["images"] = [self.pending_image]
+                self.pending_image = None
+                self.pending_image_path = None
+
             result = self.pipe.generate(
                 self.chat_history,
-                generation_config=self.generation_config,
-                streamer=streamer,
-                extra_context={"enable_thinking": self.reasoning_enabled},
+                **kwargs
             )
         except Exception as e:
             print(f"\n\n{UI.RED}Generation error:{UI.RESET} {e}\n")
@@ -413,6 +424,36 @@ class Chat:
                         print(f"{UI.YELLOW}Usage: /think [on|off]{UI.RESET}")
                 else:
                     self.toggle_reasoning()
+                continue
+
+            if root_cmd in ("/image", "/img", "/pic"):
+                if not self.metadata.is_vlm:
+                    print(
+                        f"\n{UI.YELLOW}Current model '{self.metadata.name}' is an LLM (text-only). "
+                        f"Images are only supported on VLMs.{UI.RESET}\n"
+                    )
+                    continue
+                if len(parts) > 1:
+                    raw_path = " ".join(parts[1:]).strip('\"\'')
+                    img_path = Path(raw_path)
+                    if not img_path.exists():
+                        print(f"\n{UI.RED}Image file not found: {img_path}{UI.RESET}\n")
+                        continue
+                    try:
+                        import numpy as np
+                        from PIL import Image
+
+                        pil_img = Image.open(img_path).convert("RGB")
+                        self.pending_image = ov.Tensor(np.array(pil_img))
+                        self.pending_image_path = str(img_path)
+                        print(
+                            f"\n{UI.GREEN}Image loaded: {img_path.name} "
+                            f"({pil_img.width}x{pil_img.height}). Type your prompt next.{UI.RESET}\n"
+                        )
+                    except Exception as ex:
+                        print(f"\n{UI.RED}Failed to load image: {ex}{UI.RESET}\n")
+                else:
+                    print(f"{UI.YELLOW}Usage: /image <path/to/image.jpg>{UI.RESET}")
                 continue
 
             self.generate(prompt)

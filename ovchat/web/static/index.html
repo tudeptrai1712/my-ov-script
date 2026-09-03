@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenVINO GenAI Chat</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+  <div class="app-container">
+    <!-- SIDEBAR -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+          <span class="brand-name">OpenVINO UI</span>
+        </div>
+        <button class="icon-btn" id="newChatBtn" title="New Chat">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="historySearch" placeholder="Search chats...">
+      </div>
+
+      <div class="history-section">
+        <div class="history-label">Saved History</div>
+        <div class="history-list" id="historyList">
+          <!-- Populated by JS -->
+          <div class="empty-history">Loading chat history...</div>
+        </div>
+      </div>
+
+      <!-- STATUS & SETTINGS FOOTER -->
+      <div class="sidebar-footer">
+        <div class="model-status-card" id="statusCard">
+          <div class="status-top">
+            <span class="status-dot online"></span>
+            <span class="status-model-name" id="sidebarModelName">No Model Loaded</span>
+          </div>
+          <div class="status-details">
+            <span class="status-badge" id="sidebarDeviceBadge">GPU</span>
+            <span class="status-memory" id="sidebarMemory">-- GB</span>
+          </div>
+        </div>
+        <button class="settings-btn" id="openSettingsBtn" title="Open Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span>Model Settings</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- MAIN CHAT PANEL -->
+    <main class="chat-main">
+      <!-- TOP NAV -->
+      <header class="top-nav">
+        <div class="nav-left">
+          <button class="icon-btn toggle-sidebar-btn" id="toggleSidebarBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="3" y1="12" x2="21" y2="12"></line>
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <line x1="3" y1="18" x2="21" y2="18"></line>
+            </svg>
+          </button>
+          <div class="active-model-display" id="navModelBtn">
+            <span class="model-name-text" id="navModelName">Loading...</span>
+            <span class="device-pill" id="navDevicePill">GPU</span>
+            <span class="type-pill" id="navTypePill">VLM</span>
+          </div>
+        </div>
+
+        <div class="nav-right">
+          <!-- THINKING / REASONING TOGGLE -->
+          <div class="reasoning-toggle" id="reasoningToggleContainer" title="Toggle reasoning / thinking tokens">
+            <button class="toggle-pill-btn" id="reasoningPillBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/>
+                <line x1="9" y1="21" x2="15" y2="21"></line>
+              </svg>
+              <span>Thinking: <b id="reasoningPillState">OFF</b></span>
+            </button>
+          </div>
+
+          <button class="icon-btn" id="clearChatBtn" title="Clear Chat">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- CHAT MESSAGES SCROLL AREA -->
+      <div class="messages-container" id="messagesContainer">
+        <div class="welcome-screen" id="welcomeScreen">
+          <div class="welcome-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+            </svg>
+          </div>
+          <h2>What can I help with today?</h2>
+          <p class="welcome-sub" id="welcomeModelSub">Powered by OpenVINO GenAI acceleration.</p>
+
+          <div class="quick-cards">
+            <button class="quick-card" data-prompt="Explain the architecture of OpenVINO and how it achieves fast inference on Intel GPUs.">
+              <span class="card-title">Explain OpenVINO</span>
+              <span class="card-sub">Architecture and GPU acceleration</span>
+            </button>
+            <button class="quick-card" data-prompt="Solve this step by step: Which is bigger, 9.9 or 9.11? Explain why.">
+              <span class="card-title">Reasoning test</span>
+              <span class="card-sub">Step-by-step logic and math</span>
+            </button>
+            <button class="quick-card" data-prompt="Write a Python script to monitor system memory and CPU utilization with clean terminal output.">
+              <span class="card-title">Code generator</span>
+              <span class="card-sub">Write clean, commented Python</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- INPUT BAR -->
+      <div class="input-container">
+        <form class="chat-form" id="chatForm">
+          <textarea
+            id="chatInput"
+            rows="1"
+            placeholder="Message OpenVINO... (Press Enter to send, Shift+Enter for newline)"
+            autocomplete="off"
+          ></textarea>
+          <div class="input-actions">
+            <button type="button" class="stop-btn" id="stopBtn" style="display: none;" title="Stop Generating">
+              <span class="stop-icon"></span>
+              <span>Stop</span>
+            </button>
+            <button type="submit" class="send-btn" id="sendBtn" title="Send message">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+            </button>
+          </div>
+        </form>
+        <div class="input-footer">
+          <span>AI can make mistakes. Always verify important outputs.</span>
+          <span id="historyDirNotice">Saved in chat history</span>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- SETTINGS / CONFIG MODAL -->
+  <div class="modal-backdrop" id="settingsModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Model & Hardware Configuration</h3>
+        <button class="close-modal-btn" id="closeSettingsBtn">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Model Selection -->
+        <div class="form-group">
+          <label for="settingModelSelect">Active Model</label>
+          <select id="settingModelSelect">
+            <option value="">Loading models...</option>
+          </select>
+          <div class="metadata-tags" id="modelMetaTags"></div>
+        </div>
+
+        <!-- Hardware Device -->
+        <div class="form-group">
+          <label for="settingDeviceSelect">Execution Hardware Device</label>
+          <select id="settingDeviceSelect">
+            <option value="GPU">GPU (Intel Arc / Iris Xe)</option>
+            <option value="CPU">CPU</option>
+          </select>
+          <div class="device-warning" id="deviceNotice"></div>
+        </div>
+
+        <div class="form-row">
+          <!-- Context Length -->
+          <div class="form-group col">
+            <label for="settingContext">Context Length: <span id="contextVal">32,768</span></label>
+            <input type="range" id="settingContext" min="1024" max="131072" step="1024" value="32768">
+          </div>
+
+          <!-- Max Output Tokens -->
+          <div class="form-group col">
+            <label for="settingMaxTokens">Max Output Tokens: <span id="tokensVal">8,192</span></label>
+            <input type="range" id="settingMaxTokens" min="128" max="16384" step="128" value="8192">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <!-- Temperature -->
+          <div class="form-group col">
+            <label for="settingTemp">Temperature: <span id="tempVal">0.7</span></label>
+            <input type="range" id="settingTemp" min="0.0" max="1.5" step="0.05" value="0.7">
+          </div>
+
+          <!-- Top P -->
+          <div class="form-group col">
+            <label for="settingTopP">Top-P: <span id="topPVal">0.95</span></label>
+            <input type="range" id="settingTopP" min="0.1" max="1.0" step="0.05" value="0.95">
+          </div>
+        </div>
+
+        <!-- Reasoning Default Toggle -->
+        <div class="form-group checkbox-group" id="reasoningSettingGroup">
+          <label class="switch-label">
+            <input type="checkbox" id="settingReasoning">
+            <span class="switch-slider"></span>
+            <span class="switch-text">Enable Reasoning / Thinking Mode by default</span>
+          </label>
+        </div>
+
+        <!-- Directories -->
+        <div class="form-group">
+          <label for="settingHistoryDir">Chat History Directory</label>
+          <input type="text" id="settingHistoryDir" readonly>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="saveDefaultsBtn">Save as Default</button>
+        <button class="btn btn-primary" id="applyAndLoadBtn">
+          <span id="loadSpinner" class="spinner" style="display: none;"></span>
+          <span id="loadBtnText">Apply & Load Model</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
