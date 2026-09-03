@@ -14,6 +14,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const historySearch = document.getElementById('historySearch');
   const historyDirNotice = document.getElementById('historyDirNotice');
 
+  // Universal Attachment Elements (Files & Images)
+  const attachFileBtn = document.getElementById('attachFileBtn');
+  const universalFileInput = document.getElementById('universalFileInput');
+  const attachmentPreviewBar = document.getElementById('attachmentPreviewBar');
+  const attachmentItemsList = document.getElementById('attachmentItemsList');
+
   // Top Nav Elements
   const navModelName = document.getElementById('navModelName');
   const navDevicePill = document.getElementById('navDevicePill');
@@ -58,6 +64,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loaded: false,
     modelName: '',
     device: 'GPU',
+    isVlm: false,
     displayType: 'VLM',
     contextLength: 32768,
     maxNewTokens: 8192,
@@ -65,6 +72,7 @@ document.addEventListener('DOMContentLoaded', () => {
     supportsReasoning: false,
     temperature: 0.7,
     topP: 0.95,
+    stagedAttachments: [],
     messages: [],
     historyFiles: [],
     isGenerating: false,
@@ -164,6 +172,149 @@ document.addEventListener('DOMContentLoaded', () => {
 
     saveDefaultsBtn.addEventListener('click', handleSaveDefaults);
     applyAndLoadBtn.addEventListener('click', handleApplyAndLoad);
+
+    // Universal File & Image Attachment
+    if (attachFileBtn && universalFileInput) {
+      attachFileBtn.addEventListener('click', () => {
+        universalFileInput.click();
+      });
+
+      universalFileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+          handleFilesSelected(e.target.files);
+          universalFileInput.value = '';
+        }
+      });
+    }
+
+    // Clipboard Paste (for files, images, or screenshots)
+    chatInput.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const filesToLoad = [];
+      for (const item of items) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) filesToLoad.push(file);
+        }
+      }
+      if (filesToLoad.length > 0) {
+        handleFilesSelected(filesToLoad);
+      }
+    });
+
+    // Drag & Drop
+    ['dragenter', 'dragover'].forEach(name => {
+      chatForm.addEventListener(name, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        chatForm.classList.add('drag-over');
+      }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(name => {
+      chatForm.addEventListener(name, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        chatForm.classList.remove('drag-over');
+      }, false);
+    });
+
+    chatForm.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      if (dt?.files && dt.files.length > 0) {
+        handleFilesSelected(dt.files);
+      }
+    });
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  function handleFilesSelected(fileList) {
+    Array.from(fileList).forEach(file => {
+      const isImg = file.type.startsWith('image/') || /\.(png|jpe?g|webp|bmp|gif)$/i.test(file.name);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const item = {
+          id: 'att_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+          file: file,
+          type: isImg ? 'image' : 'file',
+          name: file.name,
+          size: file.size,
+          sizeHuman: formatBytes(file.size),
+          data: e.target.result,
+        };
+        state.stagedAttachments.push(item);
+        renderAttachmentPreviews();
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderAttachmentPreviews() {
+    if (!attachmentPreviewBar || !attachmentItemsList) return;
+    if (state.stagedAttachments.length === 0) {
+      attachmentPreviewBar.style.display = 'none';
+      attachmentItemsList.innerHTML = '';
+      return;
+    }
+
+    attachmentPreviewBar.style.display = 'block';
+    attachmentItemsList.innerHTML = '';
+
+    state.stagedAttachments.forEach(item => {
+      const el = document.createElement('div');
+      el.className = 'attachment-item';
+
+      if (item.type === 'image') {
+        const img = document.createElement('img');
+        img.className = 'attachment-thumb';
+        img.src = item.data;
+        img.alt = item.name;
+        el.appendChild(img);
+      } else {
+        const icon = document.createElement('div');
+        icon.className = 'attachment-file-icon';
+        const ext = item.name.split('.').pop().toUpperCase().slice(0, 4);
+        icon.textContent = ext || 'DOC';
+        el.appendChild(icon);
+      }
+
+      const details = document.createElement('div');
+      details.className = 'attachment-details';
+      details.innerHTML = `
+        <span class="attachment-name" title="${item.name}">${item.name}</span>
+        <span class="attachment-size">${item.sizeHuman}</span>
+      `;
+      el.appendChild(details);
+
+      const rmBtn = document.createElement('button');
+      rmBtn.type = 'button';
+      rmBtn.className = 'remove-attachment-btn';
+      rmBtn.title = 'Remove attachment';
+      rmBtn.innerHTML = '&times;';
+      rmBtn.addEventListener('click', () => removeAttachment(item.id));
+      el.appendChild(rmBtn);
+
+      attachmentItemsList.appendChild(el);
+    });
+  }
+
+  function removeAttachment(id) {
+    state.stagedAttachments = state.stagedAttachments.filter(a => a.id !== id);
+    renderAttachmentPreviews();
+  }
+
+  function clearStagedAttachments() {
+    state.stagedAttachments = [];
+    renderAttachmentPreviews();
+    if (universalFileInput) universalFileInput.value = '';
   }
 
   // ========================================================
@@ -435,6 +586,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ========================================================
 
   function startNewChat() {
+    clearStagedAttachments();
     state.messages = [];
     messagesContainer.innerHTML = '';
     messagesContainer.appendChild(welcomeScreen);
@@ -447,7 +599,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function handleSendMessage(e) {
     e.preventDefault();
     const text = chatInput.value.trim();
-    if (!text || state.isGenerating) return;
+    if ((!text && state.stagedAttachments.length === 0) || state.isGenerating) return;
 
     if (!state.loaded) {
       openSettings();
@@ -456,9 +608,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     welcomeScreen.style.display = 'none';
 
+    // Capture staged attachments
+    const currentAttachments = [...state.stagedAttachments];
+    clearStagedAttachments();
+
     // Add user message
-    state.messages.push({ role: 'user', content: text });
-    appendMessageElement('user', text);
+    const userDisplayPrompt = text || '(Attached files)';
+    state.messages.push({ role: 'user', content: userDisplayPrompt });
+    appendMessageElement('user', userDisplayPrompt, false, currentAttachments);
     chatInput.value = '';
     chatInput.style.height = 'auto';
 
@@ -469,17 +626,33 @@ document.addEventListener('DOMContentLoaded', () => {
     state.abortController = new AbortController();
 
     try {
+      const payload = {
+        messages: state.messages,
+        enable_reasoning: state.reasoningEnabled,
+        max_new_tokens: state.maxNewTokens,
+        temperature: state.temperature,
+        top_p: state.topP,
+      };
+
+      const images = currentAttachments.filter(a => a.type === 'image');
+      const files = currentAttachments.filter(a => a.type === 'file');
+
+      if (images.length > 0) {
+        payload.images = images.map(a => a.data);
+      }
+      if (files.length > 0) {
+        payload.files = files.map(a => ({
+          filename: a.name,
+          data: a.data,
+          size: a.size,
+        }));
+      }
+
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: state.abortController.signal,
-        body: JSON.stringify({
-          messages: state.messages,
-          enable_reasoning: state.reasoningEnabled,
-          max_new_tokens: state.maxNewTokens,
-          temperature: state.temperature,
-          top_p: state.topP,
-        })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
@@ -579,7 +752,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // DOM RENDERING HELPERS
   // ========================================================
 
-  function appendMessageElement(role, text, isPending = false) {
+  function appendMessageElement(role, text, isPending = false, attachments = null) {
     const row = document.createElement('div');
     row.className = `message-row ${role}-row`;
 
@@ -589,6 +762,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const content = document.createElement('div');
     content.className = 'message-content';
+
+    if (attachments && attachments.length > 0) {
+      const attBox = document.createElement('div');
+      attBox.className = 'message-attachments';
+
+      attachments.forEach(att => {
+        if (att.type === 'image') {
+          const img = document.createElement('img');
+          img.className = 'user-message-image';
+          img.src = att.data;
+          img.alt = att.name;
+          attBox.appendChild(img);
+        } else {
+          const card = document.createElement('div');
+          card.className = 'message-file-card';
+          card.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+            <span><b>${att.name}</b> (${att.sizeHuman})</span>
+          `;
+          attBox.appendChild(card);
+        }
+      });
+      content.appendChild(attBox);
+    }
 
     if (role === 'assistant' && isPending && state.reasoningEnabled) {
       const thinkBox = document.createElement('details');

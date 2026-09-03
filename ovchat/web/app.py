@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import gc
+import io
 import json
 import os
 import queue
@@ -24,6 +26,7 @@ from ..config import (
     DEFAULT_MAX_NEW_TOKENS,
     MODEL_ROOT,
 )
+from ..files import extract_text_from_bytes, format_attachments_context
 from ..history import ChatHistorySaver
 from ..memory import MemoryMonitor, powershell_gpu_memory
 from ..metadata import check_device_compatibility, read_model_metadata
@@ -96,8 +99,16 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class FileAttachment(BaseModel):
+    filename: str
+    data: str  # base64 data url or raw text
+    size: Optional[int] = None
+
+
 class ChatStreamRequest(BaseModel):
     messages: List[ChatMessage]
+    images: Optional[List[str]] = None
+    files: Optional[List[FileAttachment]] = None
     enable_reasoning: Optional[bool] = None
     max_new_tokens: Optional[int] = None
     temperature: Optional[float] = None
@@ -207,6 +218,7 @@ def create_app() -> FastAPI:
             "loaded": session.is_loaded(),
             "model_name": session.model_name,
             "device": session.device,
+            "is_vlm": session.metadata.is_vlm if session.metadata else False,
             "display_type": session.metadata.display_type if session.metadata else "",
             "precision": session.metadata.precision.upper() if session.metadata else "",
             "context_length": session.context_length,
@@ -379,6 +391,50 @@ def create_app() -> FastAPI:
         if not session.is_loaded():
             raise HTTPException(status_code=400, detail="No model loaded. Please load a model first.")
 
+        # Process document/file attachments (for all models)
+        if req.files and req.messages:
+            file_items = []
+            for f in req.files:
+                b64_str = f.data
+                if "," in b64_str:
+                    _, b64_str = b64_str.split(",", 1)
+                try:
+                    raw_bytes = base64.b64decode(b64_str)
+                    content_str = extract_text_from_bytes(f.filename, raw_bytes)
+                    file_items.append({"filename": f.filename, "content": content_str})
+                except Exception as ex:
+                    file_items.append({"filename": f.filename, "content": f"[Error reading file: {ex}]"})
+
+            if file_items:
+                ctx_block = format_attachments_context(file_items)
+                last_idx = len(req.messages) - 1
+                for i in range(len(req.messages) - 1, -1, -1):
+                    if req.messages[i].role == "user":
+                        last_idx = i
+                        break
+                req.messages[last_idx].content = (
+                    f"{ctx_block}\n\n{req.messages[last_idx].content}"
+                )
+
+        # Process multimodal images (for VLM models)
+        image_tensors: List[ov.Tensor] = []
+        if req.images and session.metadata and session.metadata.is_vlm:
+            import numpy as np
+            from PIL import Image
+
+            for img_str in req.images:
+                try:
+                    if "," in img_str:
+                        _, b64data = img_str.split(",", 1)
+                    else:
+                        b64data = img_str
+                    raw_bytes = base64.b64decode(b64data)
+                    pil_img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+                    arr = np.array(pil_img)
+                    image_tensors.append(ov.Tensor(arr))
+                except Exception as e:
+                    print("Failed to decode image input:", e)
+
         # Build ChatHistory
         chat_hist = ov_genai.ChatHistory()
         for msg in req.messages:
@@ -407,11 +463,17 @@ def create_app() -> FastAPI:
                 if req.top_p is not None and hasattr(gen_cfg, "top_p"):
                     gen_cfg.top_p = req.top_p
 
+                generate_kwargs = {
+                    "generation_config": gen_cfg,
+                    "streamer": streamer_callback,
+                    "extra_context": {"enable_thinking": reasoning},
+                }
+                if session.metadata and session.metadata.is_vlm and image_tensors:
+                    generate_kwargs["images"] = image_tensors
+
                 res = session.pipe.generate(
                     chat_hist,
-                    generation_config=gen_cfg,
-                    streamer=streamer_callback,
-                    extra_context={"enable_thinking": reasoning},
+                    **generate_kwargs
                 )
 
                 # Extract metrics

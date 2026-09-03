@@ -170,6 +170,9 @@ def main() -> None:
     print(f"{UI.DIM}Commands:{UI.RESET}")
     print("  /clear  - clear conversation")
     print("  /info   - show model/memory info")
+    print("  /file   - attach file or PDF for context (/file <path>)")
+    if metadata.is_vlm:
+        print("  /image  - attach image for vision understanding (/image <path>)")
     if metadata.supports_reasoning:
         print("  /think  - toggle reasoning mode (or /think on, /think off)")
     print("  /quit   - exit\n")

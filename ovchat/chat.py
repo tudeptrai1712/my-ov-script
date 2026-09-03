@@ -141,9 +141,11 @@ class Chat:
         else:
             self.actual_memory_increase = None
 
-        # Multimodal image state (for VLM models)
+        # Multimodal image & file attachments state
         self.pending_image: Optional[ov.Tensor] = None
         self.pending_image_path: Optional[str] = None
+        self.pending_file_context: Optional[str] = None
+        self.pending_file_name: Optional[str] = None
 
     def rebuild_history(self) -> None:
         """Reconstructs ov_genai.ChatHistory from our tracked messages."""
@@ -259,11 +261,21 @@ class Chat:
         print()
 
     def generate(self, prompt: str) -> None:
-        """Streams response generation for the user prompt."""
-        # Add user message
+        """Runs streaming generation for a single user turn."""
+        if self.pending_file_context:
+            user_content = (
+                f"=== File: {self.pending_file_name} ===\n"
+                f"{self.pending_file_context}\n"
+                f"=== End of File ===\n\n{prompt}"
+            )
+            self.pending_file_context = None
+            self.pending_file_name = None
+        else:
+            user_content = prompt
+
         self.history_messages.append({
             "role": "user",
-            "content": prompt,
+            "content": user_content,
         })
         self.rebuild_history()
 
@@ -452,8 +464,27 @@ class Chat:
                         )
                     except Exception as ex:
                         print(f"\n{UI.RED}Failed to load image: {ex}{UI.RESET}\n")
+            if root_cmd in ("/file", "/doc", "/attach"):
+                if len(parts) > 1:
+                    raw_doc_path = " ".join(parts[1:]).strip('\"\'')
+                    doc_path = Path(raw_doc_path)
+                    if not doc_path.exists():
+                        print(f"\n{UI.RED}File not found: {doc_path}{UI.RESET}\n")
+                        continue
+                    try:
+                        from .files import extract_text_from_path
+
+                        text = extract_text_from_path(doc_path)
+                        self.pending_file_context = text
+                        self.pending_file_name = doc_path.name
+                        print(
+                            f"\n{UI.GREEN}Attached file: {doc_path.name} "
+                            f"({len(text):,} chars extracted). Type your prompt next.{UI.RESET}\n"
+                        )
+                    except Exception as ex:
+                        print(f"\n{UI.RED}Failed to extract file text: {ex}{UI.RESET}\n")
                 else:
-                    print(f"{UI.YELLOW}Usage: /image <path/to/image.jpg>{UI.RESET}")
+                    print(f"{UI.YELLOW}Usage: /file <path/to/file.pdf, .txt, .py, etc.>{UI.RESET}")
                 continue
 
             self.generate(prompt)
