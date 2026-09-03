@@ -88,6 +88,7 @@ my ov script/
 │   ├── settings.py             # Persistent user settings manager (user_config.json)
 │   ├── chat.py                 # Multi-turn interactive chat engine & CLI commands
 │   ├── cli.py                  # CLI runner, menus, and launch sequence
+│   ├── manager.py              # Model downloader, converter (optimum-intel), and deletion
 │   ├── ui.py                   # ANSI terminal formatting & helpers
 │   └── web/                    # FastAPI backend with OpenAI-compatible endpoints
 │       ├── __init__.py
@@ -96,8 +97,9 @@ my ov script/
 │       └── static/             # Legacy standalone web assets
 ├── requirements.txt            # Python dependencies
 ├── user_config.json            # Auto-persisted user preferences
+├── manage_models.py            # Model management CLI (download/convert/delete)
 ├── run_server.py               # Dedicated OpenAI-compatible API server (Port 8000)
-├── ovchat.py                   # Primary entry point (CLI & server)
+├── ovchat.py                   # Primary entry point (CLI, server, manager)
 ├── run_web.py                  # Legacy standalone web UI runner (Port 8080)
 └── ovchat_fallback.py          # Standalone single-file fallback script
 ```
@@ -184,7 +186,39 @@ The interactive CLI will:
 
 ---
 
-### 4. Standalone Fallback Script
+### 4. Managing Models (Download, Convert & Delete)
+
+Use the dedicated model manager to inspect disk usage, download pre-converted OpenVINO models, convert raw Hugging Face models, or safely delete models:
+
+#### Interactive Menu
+```bash
+python manage_models.py
+# or using the main runner:
+python ovchat.py --manage
+```
+
+#### Command-Line Operations:
+```bash
+# List local models with sizes, precision, and supported devices
+python manage_models.py list
+
+# Download a pre-converted OpenVINO model from Hugging Face:
+python manage_models.py download OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int8-ov
+
+# Convert and export a raw Hugging Face model or local directory to OpenVINO INT4:
+python manage_models.py convert Qwen/Qwen2.5-0.5B-Instruct --format int4
+
+# Delete a model to free disk space:
+python manage_models.py delete Gemma-4-E4B
+```
+
+> [!TIP]
+> **Pre-Converted Models vs. Local Conversion**:
+> Whenever possible, download official pre-converted models from the `OpenVINO/` namespace on Hugging Face (e.g. `OpenVINO/Llama-3.2-3B-Instruct-int4-ov`, `OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int8-ov`). They are already optimized with Intel NNCF INT4/INT8 precision and download up to 10x faster without needing local compilation.
+
+---
+
+### 5. Standalone Fallback Script
 
 If you ever need a 100% self-contained single script requiring no package folders:
 
@@ -192,7 +226,7 @@ If you ever need a 100% self-contained single script requiring no package folder
 python ovchat_fallback.py
 ```
 
-### 4. Checking Dependency Health
+### 6. Checking Dependency Health
 
 Inspect all packages and their exact installed versions:
 

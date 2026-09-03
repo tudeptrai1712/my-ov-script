@@ -59,6 +59,12 @@ REQUIRED_DEPENDENCIES: List[Dict[str, str]] = [
         "module": "httpx",
         "description": "HTTP Client for Web/API Streaming",
     },
+    {
+        "name": "huggingface_hub",
+        "package": "huggingface_hub>=0.23.0",
+        "module": "huggingface_hub",
+        "description": "Hugging Face Hub API Client",
+    },
 ]
 
 

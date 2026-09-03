@@ -34,7 +34,12 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # 2. Launch requested interface
-    if "--server" in sys.argv or "--api" in sys.argv:
+    if "--manage" in sys.argv or "--models" in sys.argv:
+        from ovchat.manager import main as manager_main
+        # Remove --manage so manager subparsers don't choke
+        sys.argv = [a for a in sys.argv if a not in ("--manage", "--models")]
+        manager_main()
+    elif "--server" in sys.argv or "--api" in sys.argv:
         from run_server import main as run_server_main
         run_server_main()
     elif "--web" in sys.argv:
