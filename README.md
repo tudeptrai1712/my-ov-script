@@ -31,6 +31,16 @@ A high-performance local AI chat suite powered by **Intel OpenVINO GenAI**, feat
   - **Copy**: One-click clipboard copy of clean output (internal reasoning tokens automatically filtered).
   - **Retry**: Regenerate any turn on the fly with the original prompt, attachments, and configuration.
 
+- **Real-Time Hardware & System Telemetry**:
+  - Monitors **CPU** utilization and **System RAM** in real time.
+  - Monitors **GPU Compute**, **Intel Arc XMX (Xe Matrix Extensions) / Neural Engine**, **GPU 3D Engine**, and **Dedicated & Shared VRAM**.
+  - Visualized via real-time responsive progress bars in the sidebar and a glanceable top-navigation telemetry pill.
+  - Built with microsecond C-level `psutil` and Windows Performance Data Helper (`pdh.dll`) via `ctypes`.
+
+- **Console Kill & Web Server Management**:
+  - Stop the web server anytime in the terminal by typing `q`, `quit`, `k`, or `kill` + `Enter`.
+  - Kill running instances from any shell via `python run_web.py --kill` or `python ovchat.py --kill-web`.
+
 - **Reasoning / Thinking Mode (`/think`)**:
   - Native support for reasoning models (Gemma 4, DeepSeek, etc.).
   - Web UI renders thoughts inside a collapsible `<details>` container (`Thinking Process`), leaving answers neat.

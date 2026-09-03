@@ -231,6 +231,19 @@ def create_app() -> FastAPI:
             "gpu_memory_human": human_bytes(current_mem),
         }
 
+    @app.get("/api/system/metrics")
+    async def system_metrics():
+        from ..sysmon import get_system_monitor
+        return get_system_monitor().get_metrics()
+
+    @app.post("/api/server/shutdown")
+    async def shutdown_server():
+        def _kill():
+            time.sleep(0.4)
+            os._exit(0)
+        threading.Thread(target=_kill, daemon=True).start()
+        return {"status": "shutting_down"}
+
     @app.post("/api/model/load")
     async def load_model(req: LoadModelRequest):
         settings = load_settings()
