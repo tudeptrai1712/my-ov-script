@@ -545,50 +545,209 @@ body {
   line-height: 1.5;
 }
 
-/* CODE BLOCKS */
-pre {
-  background: #0d0d10;
-  border: 1px solid var(--border-color);
+/* CODE CONTAINER & BLOCKS */
+.code-container {
+  margin: 14px 0;
   border-radius: var(--radius-md);
-  padding: 14px;
+  border: 1px solid var(--border-color);
+  background: #0d0d10;
+  overflow: hidden;
+}
+
+.code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.code-lang {
+  text-transform: lowercase;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: #9ca3af;
+}
+
+pre {
+  background: transparent;
+  padding: 14px 16px;
   overflow-x: auto;
-  margin: 10px 0;
+  margin: 0;
   font-family: var(--font-mono);
   font-size: 0.88rem;
-  position: relative;
+  line-height: 1.5;
 }
 
 code {
   font-family: var(--font-mono);
   background: rgba(255, 255, 255, 0.08);
-  padding: 2px 4px;
+  padding: 2px 6px;
   border-radius: 4px;
   font-size: 0.88em;
+  color: #e5e7eb;
 }
 
 pre code {
   background: transparent;
   padding: 0;
-}
-
-.code-header {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 4px;
+  border-radius: 0;
+  color: #e5e7eb;
 }
 
 .copy-btn {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
   font-size: 0.75rem;
-  padding: 2px 8px;
+  padding: 3px 8px;
   border-radius: 4px;
   cursor: pointer;
+  transition: all 0.15s;
 }
 
 .copy-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
   color: #fff;
+  border-color: var(--border-color);
+}
+
+.copy-btn.copied {
+  color: var(--success-color);
+}
+
+/* CHATGPT-STYLE MARKDOWN TABLES */
+.text-body table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 16px 0;
+  font-size: 0.9rem;
+  text-align: left;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+  background: var(--bg-card);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+.text-body thead {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.text-body th {
+  padding: 10px 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  letter-spacing: 0.02em;
+}
+
+.text-body th:last-child {
+  border-right: none;
+}
+
+.text-body td {
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.text-body td:last-child {
+  border-right: none;
+}
+
+.text-body tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.text-body tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.text-body tbody tr:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* CHATGPT-STYLE MARKDOWN TYPOGRAPHY */
+.text-body h1, .text-body h2, .text-body h3, .text-body h4 {
+  color: var(--text-primary);
+  margin-top: 18px;
+  margin-bottom: 8px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.text-body h1 {
+  font-size: 1.4rem;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 6px;
+}
+
+.text-body h2 {
+  font-size: 1.25rem;
+}
+
+.text-body h3 {
+  font-size: 1.1rem;
+}
+
+.text-body h4 {
+  font-size: 1.0rem;
+}
+
+.text-body p {
+  margin-bottom: 12px;
+  line-height: 1.65;
+}
+
+.text-body p:last-child {
+  margin-bottom: 0;
+}
+
+.text-body ul, .text-body ol {
+  margin: 8px 0 12px 22px;
+  padding: 0;
+}
+
+.text-body li {
+  margin-bottom: 5px;
+  line-height: 1.55;
+}
+
+.text-body blockquote {
+  border-left: 3px solid var(--accent-color);
+  margin: 14px 0;
+  padding: 6px 14px;
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.07);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.text-body hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 18px 0;
+}
+
+.text-body a {
+  color: var(--accent-color);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.text-body a:hover {
+  color: #60a5fa;
 }
 
 /* METRICS BAR */

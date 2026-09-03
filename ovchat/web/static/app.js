@@ -916,32 +916,91 @@ document.addEventListener('DOMContentLoaded', () => {
     content.appendChild(bar);
   }
 
+  // Configure marked if loaded
+  if (window.marked) {
+    window.marked.setOptions({
+      gfm: true,
+      breaks: true,
+      pedantic: false,
+    });
+  }
+
+  window.copyCode = function(btn) {
+    const pre = btn.closest('.code-container')?.querySelector('code');
+    if (!pre) return;
+    navigator.clipboard.writeText(pre.innerText).then(() => {
+      const span = btn.querySelector('span');
+      if (span) span.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        if (span) span.textContent = 'Copy';
+        btn.classList.remove('copied');
+      }, 2000);
+    });
+  };
+
   function formatMarkdown(text) {
     if (!text) return '';
-    // Basic Markdown Parser (Code blocks, bold, italics)
+
+    if (window.marked) {
+      try {
+        // Pre-process code blocks for custom container if needed
+        let html = window.marked.parse(text);
+
+        // Enhance pre blocks with code-container, language tag and copy button
+        html = html.replace(/<pre><code class="language-([\w-]+)">([\s\S]*?)<\/code><\/pre>/gi, (match, lang, code) => {
+          return `
+            <div class="code-container">
+              <div class="code-header">
+                <span class="code-lang">${lang}</span>
+                <button class="copy-btn" onclick="copyCode(this)" title="Copy code">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-${lang}">${code}</code></pre>
+            </div>
+          `;
+        });
+
+        // For generic pre without class
+        html = html.replace(/<pre><code>([\s\S]*?)<\/code><\/pre>/gi, (match, code) => {
+          return `
+            <div class="code-container">
+              <div class="code-header">
+                <span class="code-lang">code</span>
+                <button class="copy-btn" onclick="copyCode(this)" title="Copy code">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code>${code}</code></pre>
+            </div>
+          `;
+        });
+
+        return html;
+      } catch (e) {
+        console.error('Marked parsing error:', e);
+      }
+    }
+
+    // Fallback basic parser
     let escaped = text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
-
-    // Fenced code blocks
-    escaped = escaped.replace(/```([\w]*)\n([\s\S]*?)```/g, (match, lang, code) => {
-      return `<pre><div class="code-header"><button class="copy-btn" onclick="navigator.clipboard.writeText(this.closest('pre').querySelector('code').innerText)">Copy</button></div><code>${code}</code></pre>`;
-    });
-
-    // Inline code
     escaped = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-    // Bold
     escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-
-    // Italic
     escaped = escaped.replace(/\*([^*]+)\*/g, '<i>$1</i>');
-
-    // Paragraph linebreaks
     escaped = escaped.replace(/\n\n/g, '<br><br>');
     escaped = escaped.replace(/\n/g, '<br>');
-
     return escaped;
   }
 
