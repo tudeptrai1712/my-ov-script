@@ -1,10 +1,14 @@
-# OpenVINO GenAI Chat & Web UI
+# OpenVINO GenAI - OpenAI-Compatible API Server & CLI
 
-A high-performance local AI chat suite and custom frontend for [**OpenVINO GenAI (`openvinotoolkit/openvino.genai`)**](https://github.com/openvinotoolkit/openvino.genai), featuring dual **LLM** (Text) and **VLM** (Vision-Language) multimodal support, an **OpenWebUI / LM Studio** inspired web interface, real-time streaming, interactive terminal CLI, and an offline-first architecture.
+A high-performance local AI inference suite and OpenAI-compatible serving backend for [**OpenVINO GenAI (`openvinotoolkit/openvino.genai`)**](https://github.com/openvinotoolkit/openvino.genai), featuring dual **LLM** (Text) and **VLM** (Vision-Language) multimodal support, native Intel Arc GPU (XMX) acceleration, an interactive terminal CLI, and direct integration with [**Open WebUI**](https://github.com/open-webui/open-webui).
+
+> [!NOTE]
+> **Open WebUI Architecture & Intel Guide**:
+> In accordance with the official Intel tutorial [Demonstrating integration of Open WebUI with OpenVINO Model Server](https://docs.openvino.ai/2025/model-server/ovms_demos_integration_with_open_webui.html), the standalone built-in HTML interface is **deprecated** in favor of running a dedicated OpenAI-compatible API server (`python run_server.py` on port `8000`) and connecting it to a full-featured [Open WebUI](https://github.com/open-webui/open-webui) instance (on port `3000`). This gives you full access to RAG, web search, document indexing, voice TTS, and conversation branching with native Windows Intel Arc acceleration.
 
 > [!WARNING]
 > **Performance Notice (Web UI vs. CLI)**:
-> The Web UI provides a rich graphical experience, but browser DOM updates, markdown rendering, and Server-Sent Events (SSE) streaming overhead might not yield expected peak generation performance. For the fastest inference speeds, maximum token generation throughput (tokens/second), and minimal latency, **use the interactive CLI instead (`python ovchat.py`)**.
+> While Open WebUI provides a rich graphical interface, browser DOM updates, network streaming, and HTTP serialization introduce measurable overhead. For benchmarking or maximum raw token generation speed (highest tokens/second and minimal latency), **use the interactive CLI instead (`python ovchat.py`)**.
 
 > [!IMPORTANT]
 > **Intel Hardware Requirements (Intel Hardware Only)**:
@@ -74,6 +78,7 @@ my ov script/
 ├── ovchat/                     # Core application package
 │   ├── __init__.py             # Package exports & startup dependency verification
 │   ├── verifier.py             # Automatic pip dependency verifier & diagnostics
+│   ├── sysmon.py               # Hardware telemetry engine (CPU, RAM, GPU Compute, XMX, VRAM)
 │   ├── config.py               # Constants, directories, and context defaults
 │   ├── files.py                # Document & PDF text extraction utilities
 │   ├── metadata.py             # Model metadata inspection & VLM detection
@@ -84,19 +89,16 @@ my ov script/
 │   ├── chat.py                 # Multi-turn interactive chat engine & CLI commands
 │   ├── cli.py                  # CLI runner, menus, and launch sequence
 │   ├── ui.py                   # ANSI terminal formatting & helpers
-│   └── web/                    # FastAPI Web UI backend & static assets
+│   └── web/                    # FastAPI backend with OpenAI-compatible endpoints
 │       ├── __init__.py
 │       ├── __main__.py         # Run via python -m ovchat.web
-│       ├── app.py              # FastAPI server (REST endpoints & SSE streaming)
-│       └── static/
-│           ├── index.html      # OpenWebUI dark layout with eject & attachments
-│           ├── style.css       # ChatGPT table styling, dark theme, metrics
-│           ├── app.js          # Reactive client, SSE stream reader, actions
-│           └── marked.min.js   # Bundled offline GFM markdown parser
+│       ├── app.py              # FastAPI server (OpenAI /v1 API + legacy endpoints)
+│       └── static/             # Legacy standalone web assets
 ├── requirements.txt            # Python dependencies
 ├── user_config.json            # Auto-persisted user preferences
-├── run_web.py                  # Direct Web UI launcher (with auto-browser opening)
-├── ovchat.py                   # Main entry point (CLI & Web UI)
+├── run_server.py               # Dedicated OpenAI-compatible API server (Port 8000)
+├── ovchat.py                   # Primary entry point (CLI & server)
+├── run_web.py                  # Legacy standalone web UI runner (Port 8080)
 └── ovchat_fallback.py          # Standalone single-file fallback script
 ```
 
@@ -106,8 +108,8 @@ my ov script/
 
 - **Python**: 3.10 – 3.14 (64-bit)
 - **Hardware**:
-  - Intel Arc GPU / Intel Iris Xe / Integrated Graphics (or Intel CPU)
-  - Intel NPU (supported for compatible text LLMs)
+  - Intel Arc GPU (Alchemist or newer, e.g. Arc A-series, B-series B390/B580, Core Ultra Xe-LPG/Xe2)
+  - Intel NPU (Core Ultra Series 1+, Core Series 3+)
 - **Operating System**: Windows 10/11 or Linux
 
 ### Dependencies
@@ -118,52 +120,73 @@ Dependencies are checked and installed **automatically on every launch**. Altern
 pip install -r requirements.txt
 ```
 
-Packages used:
-- `openvino` & `openvino-genai` (Inference engine & pipelines)
-- `fastapi` & `uvicorn` (Web UI backend & streaming server)
-- `Pillow` & `numpy` (Image processing & tensor conversion for VLMs)
-- `pypdf` (PDF text extraction)
-- `httpx` (HTTP/SSE client)
-
 ---
 
 ## Quickstart Guide
 
-### 1. Launching the Web UI
+### 1. Launching the OpenAI-Compatible API Server (Port 8000)
 
-Run either of the following commands:
+Start the high-performance local server:
 
 ```bash
-# Using the main runner:
-python ovchat.py --web
-
-# Or using the dedicated web launcher:
-python run_web.py
+python run_server.py --port 8000
+# or using the main runner:
+python ovchat.py --server
 ```
 
-Options:
-- `--port 8080`: Specify custom port (default: 8080)
-- `--host 127.0.0.1`: Specify host address
-- `--no-browser`: Do not automatically open the browser tab
+- **OpenAI API Base URL**: `http://127.0.0.1:8000/v1`
+- **Models List Endpoint**: `http://127.0.0.1:8000/v1/models`
+- **Chat Completions**: `http://127.0.0.1:8000/v1/chat/completions`
+- **To stop the server**: Type `q` or `kill` + `Enter` in the console, or run `python run_server.py --kill`.
 
-Open **`http://127.0.0.1:8080`** in your browser.
+---
 
-### 2. Launching the Terminal CLI
+### 2. Setting Up & Connecting Open WebUI (Port 3000)
+
+Following the [OpenVINO Open WebUI Integration Demo](https://docs.openvino.ai/2025/model-server/ovms_demos_integration_with_open_webui.html), launch Open WebUI using either method:
+
+#### Option A: Via Python / Pip (Recommended on Windows)
+```bash
+pip install open-webui
+open-webui serve --port 3000
+```
+
+#### Option B: Via Docker
+```bash
+docker run -d -p 3000:8080 -e OPENAI_API_BASE_URL=http://host.docker.internal:8000/v1 -v open-webui:/app/backend/data --name open-webui ghcr.io/open-webui/open-webui:main
+```
+
+#### Connecting in Open WebUI:
+1. Open your browser to **`http://localhost:3000`**.
+2. Go to **Settings (gear icon) > Connections > OpenAI API**.
+3. Set **API Base URL**:
+   - If running natively: `http://127.0.0.1:8000/v1`
+   - If running inside Docker: `http://host.docker.internal:8000/v1`
+4. Set **API Key**: `openvino` (or any string).
+5. Click **Verify / Save Connection**.
+6. Open WebUI will instantly pull your local models (e.g. `Gemma-4-E4B`) from your server with complete streaming, document upload, and vision support!
+
+---
+
+### 3. Launching the Interactive Terminal CLI (Peak Speed)
+
+For maximum inference speed without any HTTP/browser serialization overhead:
 
 ```bash
 python ovchat.py
 ```
 
 The interactive CLI will:
-1. Verify dependencies.
-2. Prompt you to choose an available model from your model directory.
-3. Automatically filter and show only compatible hardware devices.
-4. Prompt for reasoning mode (if supported by the model).
-5. Start the chat session.
+1. Auto-verify dependencies.
+2. Let you select any model from `D:\AI models\openvino-genai`.
+3. Filter compatible hardware (Intel Arc GPU, CPU, NPU).
+4. Run with maximum raw tokens/second throughput.
 
-### 3. Using the Standalone Fallback Script
+---
 
-If you want a portable, single-file script that requires no package folder:
+### 4. Standalone Fallback Script
+
+If you ever need a 100% self-contained single script requiring no package folders:
 
 ```bash
 python ovchat_fallback.py

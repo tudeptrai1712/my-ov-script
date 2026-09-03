@@ -1,9 +1,13 @@
 """
-Run OpenVINO GenAI Web UI.
+OpenVINO GenAI OpenAI-Compatible API Server.
+Dedicated backend for Open WebUI and other OpenAI API clients.
+
+Reference implementation & guide:
+https://docs.openvino.ai/2025/model-server/ovms_demos_integration_with_open_webui.html
 
 Usage:
-    python run_web.py [--port 8080] [--host 127.0.0.1] [--no-browser] [--status]
-    python run_web.py --kill [--port 8080]   # Kill any running Web UI on port
+    python run_server.py [--port 8000] [--host 0.0.0.0]
+    python run_server.py --kill [--port 8000]
 """
 
 import argparse
@@ -12,19 +16,9 @@ import signal
 import subprocess
 import sys
 import threading
-import time
-import webbrowser
 
 # Verify dependencies before importing uvicorn or web modules
 from ovchat.verifier import print_dependency_status, verify_dependencies
-
-
-def open_browser(url: str):
-    time.sleep(1.2)
-    try:
-        webbrowser.open_new_tab(url)
-    except Exception:
-        pass
 
 
 def find_pids_on_port(port: int) -> list:
@@ -45,11 +39,11 @@ def find_pids_on_port(port: int) -> list:
             return []
 
 
-def kill_web_server(port: int = 8080) -> bool:
-    """Finds and terminates any running process on the specified web port."""
+def kill_server_on_port(port: int = 8000) -> bool:
+    """Finds and terminates any running process on the specified API port."""
     pids = find_pids_on_port(port)
     if not pids:
-        print(f"\n[Web UI] No active web server found running on port {port}.\n")
+        print(f"\n[API Server] No active server found running on port {port}.\n")
         return False
 
     killed_any = False
@@ -57,17 +51,17 @@ def kill_web_server(port: int = 8080) -> bool:
         if pid == os.getpid():
             continue
         try:
-            print(f"[Web UI] Killing process PID {pid} listening on port {port}...")
+            print(f"[API Server] Killing process PID {pid} listening on port {port}...")
             if os.name == "nt":
                 subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
             else:
                 os.kill(pid, signal.SIGTERM)
             killed_any = True
         except Exception as e:
-            print(f"[Web UI] Failed to kill PID {pid}: {e}")
+            print(f"[API Server] Failed to kill PID {pid}: {e}")
 
     if killed_any:
-        print(f"[Web UI] Successfully stopped web server on port {port}.\n")
+        print(f"[API Server] Successfully stopped server on port {port}.\n")
     return killed_any
 
 
@@ -80,7 +74,7 @@ def console_listener(server):
                 break
             cmd = line.strip().lower()
             if cmd in ("q", "quit", "k", "kill", "stop", "exit"):
-                print("\n[Web UI] Shutdown command received in console. Stopping server...\n")
+                print("\n[API Server] Shutdown command received in console. Stopping server...\n")
                 server.should_exit = True
                 break
         except Exception:
@@ -88,12 +82,11 @@ def console_listener(server):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Launch OpenVINO GenAI Web UI")
-    parser.add_argument("--host", default="127.0.0.1", help="Host interface (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8080, help="Port (default: 8080)")
-    parser.add_argument("--no-browser", action="store_true", help="Do not automatically open browser")
+    parser = argparse.ArgumentParser(description="Launch OpenVINO GenAI OpenAI-Compatible API Server")
+    parser.add_argument("--host", default="0.0.0.0", help="Host interface (default: 0.0.0.0 to allow Open WebUI / Docker access)")
+    parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
     parser.add_argument("--status", action="store_true", help="Display dependency check status")
-    parser.add_argument("--kill", "--stop", action="store_true", help="Kill any existing Web UI server on port and exit")
+    parser.add_argument("--kill", "--stop", action="store_true", help="Kill any existing API server on port and exit")
 
     args = parser.parse_args()
 
@@ -102,7 +95,7 @@ def main():
         sys.exit(0)
 
     if args.kill:
-        kill_web_server(args.port)
+        kill_server_on_port(args.port)
         sys.exit(0)
 
     # Automatic dependency verification
@@ -115,22 +108,16 @@ def main():
     from ovchat.web.app import create_app
 
     app = create_app()
-    url = f"http://{args.host}:{args.port}"
+    api_url = f"http://127.0.0.1:{args.port}/v1"
 
     print("\n" + "=" * 68)
-    print("  [DEPRECATION NOTICE]")
-    print("  The custom built-in Web UI is deprecated in favor of:")
-    print("    python run_server.py --port 8000")
-    print("  which provides a standard OpenAI-compatible API for Open WebUI.")
-    print("  Reference: https://docs.openvino.ai/2025/model-server/ovms_demos_integration_with_open_webui.html")
-    print("=" * 68)
-    print("  OpenVINO GenAI Legacy Web UI")
-    print(f"  URL: {url}")
-    print("  Control: Type 'q' or 'kill' + Enter in console to stop")
+    print("  OpenVINO GenAI - OpenAI-Compatible API Server")
+    print(f"  OpenAI API Base URL : {api_url}")
+    print(f"  Models Endpoint     : {api_url}/models")
+    print(f"  Chat Endpoint       : {api_url}/chat/completions")
+    print("  Open WebUI Target   : Set OpenAI Base URL to " + api_url)
+    print("  Console Control     : Type 'q' or 'kill' + Enter in console to stop")
     print("=" * 68 + "\n")
-
-    if not args.no_browser:
-        threading.Thread(target=open_browser, args=(url,), daemon=True).start()
 
     config = uvicorn.Config(
         app=app,
@@ -146,8 +133,9 @@ def main():
     try:
         server.run()
     except (KeyboardInterrupt, SystemExit):
-        print("\n[Web UI] Server stopped.")
+        print("\n[API Server] Server stopped.")
 
 
 if __name__ == "__main__":
     main()
+
