@@ -2,9 +2,18 @@
 
 A high-performance local AI inference suite and OpenAI-compatible serving backend for [**OpenVINO GenAI (`openvinotoolkit/openvino.genai`)**](https://github.com/openvinotoolkit/openvino.genai), featuring dual **LLM** (Text) and **VLM** (Vision-Language) multimodal support, native Intel Arc GPU (XMX) acceleration, an interactive terminal CLI, and direct integration with [**Open WebUI**](https://github.com/open-webui/open-webui).
 
+> [!CAUTION]
+> **Web UI Code Deprecation Notice (Will Be Deleted Soon)**:
+> The custom standalone Web UI code (`run_web.py` and `ovchat/web/static/`) is **deprecated and will be deleted soon**. Please transition to the dedicated OpenAI-compatible API server (`python run_server.py` on port `8000`) paired with [Open WebUI](https://github.com/open-webui/open-webui) on port `3000`, or use the high-speed interactive CLI (`python ovchat.py`).
+
+> [!WARNING]
+> **Intel NPU Advisory (Currently Not Working)**:
+> Intel NPU execution is **currently not working / unstable** in the current OpenVINO GenAI release. Please choose **`GPU`** (or `CPU`) as your target hardware device for all generation and chat workflows until upstream fixes are delivered.
+
 > [!NOTE]
 > **Open WebUI Architecture & Intel Guide**:
 > In accordance with the official Intel tutorial [Demonstrating integration of Open WebUI with OpenVINO Model Server](https://docs.openvino.ai/2025/model-server/ovms_demos_integration_with_open_webui.html), the standalone built-in HTML interface is **deprecated** in favor of running a dedicated OpenAI-compatible API server (`python run_server.py` on port `8000`) and connecting it to a full-featured [Open WebUI](https://github.com/open-webui/open-webui) instance (on port `3000`). This gives you full access to RAG, web search, document indexing, voice TTS, and conversation branching with native Windows Intel Arc acceleration.
+> In accordance with the official Intel tutorial [Demonstrating integration of Open WebUI with OpenVINO Model Server](https://docs.openvino.ai/2025/model-server/ovms_demos_integration_with_open_webui.html), the standalone built-in HTML interface is deprecated in favor of running a dedicated OpenAI-compatible API server (`python run_server.py` on port `8000`) and connecting it to a full-featured [Open WebUI](https://github.com/open-webui/open-webui) instance (on port `3000`). This gives you full access to RAG, web search, document indexing, voice TTS, and conversation branching with native Windows Intel Arc acceleration.
 
 > [!WARNING]
 > **Performance Notice (Web UI vs. CLI)**:
@@ -15,6 +24,7 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
 > This application is specifically tailored for Intel hardware architectures:
 > - **GPU**: Requires **Intel Alchemist (1st Gen Arc / Xe-HPG) or newer** (including Battlemage B-series, Meteor Lake Xe-LPG, and Lunar Lake / Arrow Lake Xe2). Older graphics generations (Intel UHD, early Iris Xe) lack the required Matrix/DPAS instructions and will either run slowly or fail compilation.
 > - **NPU**: Requires an integrated Intel Neural Processing Unit on **Intel Core Ultra Series 1 (Meteor Lake) and newer**, or **Intel Core Series 3 and newer**. Note that in OpenVINO GenAI, VLMs (vision-language models) require GPU or CPU; the NPU is supported for compatible text-only causal LLMs.
+> - **NPU**: Currently **not working / disabled** due to upstream runtime instability. Please select **`GPU`** or **`CPU`**.
 
 ## Key Features
 
@@ -239,6 +249,10 @@ python run_web.py --status
 ---
 
 ## Web UI Guide
+## Web UI Guide (Legacy - Will Be Deleted Soon)
+
+> [!CAUTION]
+> The custom standalone Web UI code is **deprecated and scheduled for deletion**. Please use `run_server.py` on port 8000 connected to Open WebUI on port 3000 instead.
 
 ### Top Navigation Bar
 - **Model Display Badge**: Shows active model name, hardware device (`GPU`, `CPU`), and type (`VLM` / `LLM`). Click to open Model Configuration.
