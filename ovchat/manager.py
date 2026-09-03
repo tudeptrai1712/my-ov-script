@@ -2,6 +2,7 @@
 OpenVINO GenAI Model Manager.
 Handles downloading from Hugging Face, automated conversion to OpenVINO IR,
 model deletion/cleanup, and server status.
+Always converts models into INT4 format and skips conversion for models already in OpenVINO INT4 format.
 """
 
 import argparse
@@ -25,52 +26,52 @@ from .ui import UI, human_bytes
 RECOMMENDED_MODELS: List[Dict[str, str]] = [
     {
         "name": "Qwen 2.5 Coder 0.5B (Code & Chat)",
-        "repo_id": "OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int8-ov",
+        "repo_id": "OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int4-ov",
         "type": "LLM",
-        "size": "~0.6 GB",
-        "description": "Ultra-lightweight coding and conversational model.",
+        "size": "~0.4 GB",
+        "description": "Ultra-lightweight coding and conversational model (INT4).",
     },
     {
         "name": "Qwen 2.5 1.5B Instruct",
         "repo_id": "OpenVINO/Qwen2.5-1.5B-Instruct-int4-ov",
         "type": "LLM",
         "size": "~1.1 GB",
-        "description": "Fast, high quality small language model.",
+        "description": "Fast, high quality small language model (INT4).",
     },
     {
         "name": "Llama 3.2 1B Instruct",
         "repo_id": "OpenVINO/Llama-3.2-1B-Instruct-int4-ov",
         "type": "LLM",
         "size": "~0.8 GB",
-        "description": "Meta's lightweight on-device assistant.",
+        "description": "Meta's lightweight on-device assistant (INT4).",
     },
     {
         "name": "Llama 3.2 3B Instruct",
         "repo_id": "OpenVINO/Llama-3.2-3B-Instruct-int4-ov",
         "type": "LLM",
         "size": "~2.1 GB",
-        "description": "State-of-the-art compact conversational model.",
+        "description": "State-of-the-art compact conversational model (INT4).",
     },
     {
         "name": "DeepSeek R1 Distill Qwen 1.5B (Reasoning)",
         "repo_id": "OpenVINO/DeepSeek-R1-Distill-Qwen-1.5B-int4-ov",
         "type": "LLM",
         "size": "~1.1 GB",
-        "description": "Compact reasoning model with thinking capabilities.",
+        "description": "Compact reasoning model with thinking capabilities (INT4).",
     },
     {
         "name": "Gemma 2 2B IT",
         "repo_id": "OpenVINO/gemma-2-2b-it-int4-ov",
         "type": "LLM",
         "size": "~1.6 GB",
-        "description": "Google's high-efficiency lightweight model.",
+        "description": "Google's high-efficiency lightweight model (INT4).",
     },
     {
         "name": "Llava 1.6 Mistral 7B (Vision & Language)",
         "repo_id": "OpenVINO/llava-v1.6-mistral-7b-int4-ov",
         "type": "VLM",
         "size": "~4.8 GB",
-        "description": "Multimodal vision-language model for image understanding.",
+        "description": "Multimodal vision-language model for image understanding (INT4).",
     },
 ]
 
@@ -171,7 +172,7 @@ def delete_model(model_identifier: str, force: bool = False) -> bool:
     print(f"\nDeleting '{target_path.name}' ({size_str})...")
     try:
         shutil.rmtree(target_path)
-        print(f"{UI.GREEN}[✓] Successfully deleted {target_path.name}. Freed {size_str}.{UI.RESET}\n")
+        print(f"{UI.GREEN}[OK] Successfully deleted {target_path.name}. Freed {size_str}.{UI.RESET}\n")
 
         # Check if this model was default in user_config.json
         settings = load_settings()
@@ -198,15 +199,20 @@ def check_hf_repo_is_openvino(repo_id: str, token: Optional[str] = None) -> Tupl
 
 
 def find_alternative_ov_repo(base_model_id: str, token: Optional[str] = None) -> Optional[str]:
-    """Attempts to find an official or community OpenVINO model for a given model ID."""
+    """Attempts to find an official or community OpenVINO INT4 model for a given model ID."""
     api = HfApi(token=token)
     basename = base_model_id.split("/")[-1]
 
-    # Search OpenVINO namespace
+    # Search OpenVINO namespace for an INT4 pre-converted model
     try:
-        candidates = list(api.list_models(search=basename, author="OpenVINO", limit=5))
+        candidates = list(api.list_models(search=basename, author="OpenVINO", limit=10))
+        # Prioritize INT4 models
         for c in candidates:
-            if basename.lower() in c.id.lower() and ("-ov" in c.id.lower() or "openvino" in c.id.lower()):
+            c_lower = c.id.lower()
+            if basename.lower() in c_lower and "int4" in c_lower:
+                return c.id
+        for c in candidates:
+            if basename.lower() in c.id.lower() and "-ov" in c.id.lower():
                 return c.id
     except Exception:
         pass
@@ -222,7 +228,27 @@ def convert_model_to_openvino(
     """
     Converts a raw Hugging Face / PyTorch / SafeTensors model into OpenVINO IR format
     using optimum-intel and NNCF quantization.
+    Always produces INT4 format and skips conversion for models already in OpenVINO INT4 format.
     """
+    # Always enforce INT4 format
+    weight_format = "int4"
+
+    # 1. Check if target model is already in OpenVINO INT4 format
+    local_p = Path(model_id_or_path)
+    if local_p.is_dir() and any(local_p.glob("*.xml")):
+        meta = read_model_metadata(local_p)
+        if "int4" in meta.precision.lower() or "int4" in local_p.name.lower():
+            print(f"\n{UI.GREEN}[OK] '{model_id_or_path}' is already an OpenVINO INT4 model. Skipping conversion.{UI.RESET}\n")
+            return True
+
+    # 2. Check if remote HF repo is already an OpenVINO INT4 model
+    is_ov, files = check_hf_repo_is_openvino(model_id_or_path)
+    if is_ov:
+        if "int4" in model_id_or_path.lower() or any("int4" in f.lower() for f in files):
+            print(f"\n{UI.GREEN}[OK] Repository '{model_id_or_path}' is already an OpenVINO INT4 model on Hugging Face.{UI.RESET}")
+            print("Downloading pre-converted INT4 model directly instead of re-converting...\n")
+            return download_model(model_id_or_path, output_name=output_dir.name, weight_format="int4")
+
     # Check if optimum-intel is available
     optimum_installed = False
     try:
@@ -234,7 +260,7 @@ def convert_model_to_openvino(
     if not optimum_installed:
         print("\n" + "=" * 68)
         print("  [Dependency Required] optimum-intel")
-        print("  Conversion of raw PyTorch/SafeTensors models to OpenVINO requires")
+        print("  Conversion of raw PyTorch/SafeTensors models to OpenVINO INT4 requires")
         print("  the 'optimum-intel' package.")
         print("=" * 68)
         choice = input("\nWould you like to install optimum-intel now via pip? (Y/n): ").strip().lower()
@@ -245,7 +271,7 @@ def convert_model_to_openvino(
         print("\nInstalling optimum-intel via pip...")
         try:
             subprocess.check_call([sys.executable, "-m", "pip", "install", "optimum-intel[openvino]"])
-            print(f"{UI.GREEN}[✓] optimum-intel installed successfully!{UI.RESET}\n")
+            print(f"{UI.GREEN}[OK] optimum-intel installed successfully!{UI.RESET}\n")
         except Exception as e:
             print(f"{UI.RED}[!] Failed to install optimum-intel: {e}{UI.RESET}")
             return False
@@ -253,9 +279,9 @@ def convert_model_to_openvino(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n" + "=" * 70)
-    print(f"  Starting OpenVINO Conversion: {model_id_or_path}")
-    print(f"  Weight Quantization Format  : {weight_format.upper()}")
-    print(f"  Target Destination Directory: {output_dir}")
+    print(f"  Starting OpenVINO INT4 Conversion: {model_id_or_path}")
+    print(f"  Weight Quantization Format       : INT4 (Always Enforced)")
+    print(f"  Target Destination Directory     : {output_dir}")
     print("=" * 70 + "\n")
 
     cmd = [
@@ -267,7 +293,7 @@ def convert_model_to_openvino(
         "--model",
         model_id_or_path,
         "--weight-format",
-        weight_format,
+        "int4",
     ]
     if trust_remote_code:
         cmd.append("--trust-remote-code")
@@ -277,7 +303,7 @@ def convert_model_to_openvino(
     try:
         res = subprocess.run(cmd, check=True)
         if res.returncode == 0 and any(output_dir.glob("*.xml")):
-            print(f"\n{UI.GREEN}[✓] Model successfully converted and saved to:{UI.RESET} {output_dir}\n")
+            print(f"\n{UI.GREEN}[OK] Model successfully converted to INT4 and saved to:{UI.RESET} {output_dir}\n")
             return True
         else:
             print(f"\n{UI.RED}[!] Export finished but no .xml files were found in {output_dir}.{UI.RESET}\n")
@@ -295,9 +321,11 @@ def download_model(
 ) -> bool:
     """
     Downloads a model from Hugging Face.
-    - If already in OpenVINO format: downloads directly.
-    - If not in OpenVINO format: offers pre-converted alternative or converts locally.
+    - If already in OpenVINO format: downloads directly WITHOUT any conversion.
+    - If not in OpenVINO format: searches for an official pre-converted INT4 model,
+      or converts locally to INT4.
     """
+    weight_format = "int4"  # Always enforce INT4
     repo_id = clean_repo_id(repo_id)
     root = get_model_root()
 
@@ -315,7 +343,8 @@ def download_model(
     is_ov, files = check_hf_repo_is_openvino(repo_id, token=token)
 
     if is_ov:
-        print(f"{UI.GREEN}[✓] Confirmed OpenVINO format repository!{UI.RESET}")
+        # Model is ALREADY an OpenVINO model: do NOT convert, download directly!
+        print(f"{UI.GREEN}[OK] Confirmed OpenVINO format repository. Downloading directly without conversion...{UI.RESET}")
         print(f"Downloading files to: {target_dir} ...\n")
         try:
             snapshot_download(
@@ -324,7 +353,7 @@ def download_model(
                 token=token,
                 local_dir_use_symlinks=False,
             )
-            print(f"\n{UI.GREEN}[✓] Successfully downloaded {repo_id} to:{UI.RESET} {target_dir}\n")
+            print(f"\n{UI.GREEN}[OK] Successfully downloaded {repo_id} to:{UI.RESET} {target_dir}\n")
 
             # Show metadata
             meta = read_model_metadata(target_dir)
@@ -339,17 +368,17 @@ def download_model(
     # Repo is not an OpenVINO model
     print(f"\n{UI.YELLOW}[!] Note: '{repo_id}' is a raw PyTorch/SafeTensors model (not OpenVINO IR).{UI.RESET}")
 
-    # Check for an official pre-converted OpenVINO model
+    # Check for an official pre-converted OpenVINO INT4 model
     alt_repo = find_alternative_ov_repo(repo_id, token=token)
     if alt_repo:
-        print(f"\n{UI.CYAN}Found pre-converted OpenVINO model on Hugging Face:{UI.RESET} {UI.BOLD}{alt_repo}{UI.RESET}")
-        choice = input(f"Would you prefer to download '{alt_repo}' directly? (Faster & pre-optimized) [Y/n]: ").strip().lower()
+        print(f"\n{UI.CYAN}Found pre-converted OpenVINO INT4 model on Hugging Face:{UI.RESET} {UI.BOLD}{alt_repo}{UI.RESET}")
+        choice = input(f"Would you prefer to download '{alt_repo}' directly? (Faster & pre-optimized INT4) [Y/n]: ").strip().lower()
         if choice != "n":
-            return download_model(alt_repo, output_name=output_name, weight_format=weight_format, token=token)
+            return download_model(alt_repo, output_name=output_name, weight_format="int4", token=token)
 
-    # Convert locally
-    print(f"\nConverting '{repo_id}' to OpenVINO format ({weight_format.upper()}) ...")
-    return convert_model_to_openvino(repo_id, target_dir, weight_format=weight_format)
+    # Convert locally to INT4
+    print(f"\nConverting '{repo_id}' to OpenVINO INT4 format ...")
+    return convert_model_to_openvino(repo_id, target_dir, weight_format="int4")
 
 
 def interactive_menu() -> None:
@@ -360,9 +389,9 @@ def interactive_menu() -> None:
         print(f"  Root Directory: {get_model_root()}")
         print("=" * 68)
         print("  [1] List Local Models")
-        print("  [2] Download Model from Hugging Face (OpenVINO IR or Auto-Convert)")
-        print("  [3] Choose from Recommended OpenVINO Models")
-        print("  [4] Convert Local or Remote Model to OpenVINO (optimum-intel)")
+        print("  [2] Download Model from Hugging Face (OpenVINO IR or Auto-Convert to INT4)")
+        print("  [3] Choose from Recommended OpenVINO INT4 Models")
+        print("  [4] Convert Local or Remote Model to OpenVINO INT4 (optimum-intel)")
         print("  [5] Delete a Local Model")
         print("  [6] Stop / Kill Running API Server (Port 8000)")
         print("  [0] Exit")
@@ -375,16 +404,16 @@ def interactive_menu() -> None:
             input("Press Enter to continue...")
 
         elif choice == "2":
-            repo = input("\nEnter Hugging Face Repo ID (e.g. OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int8-ov): ").strip()
+            repo = input("\nEnter Hugging Face Repo ID (e.g. OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int4-ov): ").strip()
             if repo:
                 custom_name = input("Custom local folder name (leave blank for default): ").strip() or None
                 token = input("Hugging Face token (optional, leave blank if public): ").strip() or None
-                download_model(repo, output_name=custom_name, token=token)
+                download_model(repo, output_name=custom_name, weight_format="int4", token=token)
             input("Press Enter to continue...")
 
         elif choice == "3":
             print("\n" + "=" * 76)
-            print("  Recommended Pre-Converted OpenVINO Models (Ready for Intel GPU / NPU)")
+            print("  Recommended Pre-Converted OpenVINO INT4 Models (Ready for Intel GPU / NPU)")
             print("=" * 76)
             for i, item in enumerate(RECOMMENDED_MODELS, start=1):
                 print(f"  [{i}] {item['name']:<38} ({item['type']}, {item['size']})")
@@ -396,17 +425,16 @@ def interactive_menu() -> None:
             sub = input("\nSelect model to download [0-7]: ").strip()
             if sub.isdigit() and 1 <= int(sub) <= len(RECOMMENDED_MODELS):
                 rec = RECOMMENDED_MODELS[int(sub) - 1]
-                download_model(rec["repo_id"])
+                download_model(rec["repo_id"], weight_format="int4")
             input("Press Enter to continue...")
 
         elif choice == "4":
             model_src = input("\nEnter Model ID on HF or Local Directory path to convert: ").strip()
             if model_src:
-                fmt = input("Weight format (int4/int8/fp16, default: int4): ").strip().lower() or "int4"
-                def_name = model_src.replace("\\", "/").split("/")[-1] + f"-{fmt}-ov"
+                def_name = model_src.replace("\\", "/").split("/")[-1] + "-int4-ov"
                 folder_name = input(f"Destination folder name (default: {def_name}): ").strip() or def_name
                 out_path = get_model_root() / folder_name
-                convert_model_to_openvino(model_src, out_path, weight_format=fmt)
+                convert_model_to_openvino(model_src, out_path, weight_format="int4")
             input("Press Enter to continue...")
 
         elif choice == "5":
@@ -430,7 +458,7 @@ def interactive_menu() -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="OpenVINO GenAI Model Management Tool")
+    parser = argparse.ArgumentParser(description="OpenVINO GenAI Model Management Tool (Strictly INT4)")
     subparsers = parser.add_subparsers(dest="command", help="Subcommand to run")
 
     # list
@@ -443,16 +471,16 @@ def main():
 
     # download
     dl_p = subparsers.add_parser("download", help="Download a model from Hugging Face")
-    dl_p.add_argument("repo_id", help="Hugging Face repo ID (e.g. OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int8-ov)")
+    dl_p.add_argument("repo_id", help="Hugging Face repo ID (e.g. OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int4-ov)")
     dl_p.add_argument("-o", "--output", help="Custom output folder name")
-    dl_p.add_argument("--format", default="int4", choices=["int4", "int8", "fp16"], help="Weight format if conversion is needed (default: int4)")
+    dl_p.add_argument("--format", default="int4", choices=["int4"], help="Weight format (strictly int4)")
     dl_p.add_argument("--token", help="Hugging Face access token (optional)")
 
     # convert
-    conv_p = subparsers.add_parser("convert", help="Convert a model to OpenVINO format")
+    conv_p = subparsers.add_parser("convert", help="Convert a model to OpenVINO INT4 format")
     conv_p.add_argument("model", help="Hugging Face model ID or local directory to convert")
-    conv_p.add_argument("-o", "--output", help="Output directory path (default: model_root / <name>-<format>-ov)")
-    conv_p.add_argument("--format", default="int4", choices=["int4", "int8", "fp16"], help="Weight quantization format (default: int4)")
+    conv_p.add_argument("-o", "--output", help="Output directory path (default: model_root / <name>-int4-ov)")
+    conv_p.add_argument("--format", default="int4", choices=["int4"], help="Weight quantization format (strictly int4)")
 
     # kill
     subparsers.add_parser("kill", help="Stop running API server")
@@ -466,15 +494,15 @@ def main():
     elif args.command == "delete":
         delete_model(args.model, force=args.force)
     elif args.command == "download":
-        download_model(args.repo_id, output_name=args.output, weight_format=args.format, token=args.token)
+        download_model(args.repo_id, output_name=args.output, weight_format="int4", token=args.token)
     elif args.command == "convert":
         root = get_model_root()
         if args.output:
             out_dir = Path(args.output)
         else:
             base_name = args.model.replace("\\", "/").split("/")[-1]
-            out_dir = root / f"{base_name}-{args.format}-ov"
-        convert_model_to_openvino(args.model, out_dir, weight_format=args.format)
+            out_dir = root / f"{base_name}-int4-ov"
+        convert_model_to_openvino(args.model, out_dir, weight_format="int4")
     elif args.command == "kill":
         from kill_server import main as kill_main
         kill_main()
@@ -482,4 +510,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

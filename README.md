@@ -202,11 +202,11 @@ python ovchat.py --manage
 # List local models with sizes, precision, and supported devices
 python manage_models.py list
 
-# Download a pre-converted OpenVINO model from Hugging Face:
-python manage_models.py download OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int8-ov
+# Download a pre-converted OpenVINO INT4 model from Hugging Face:
+python manage_models.py download OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int4-ov
 
 # Convert and export a raw Hugging Face model or local directory to OpenVINO INT4:
-python manage_models.py convert Qwen/Qwen2.5-0.5B-Instruct --format int4
+python manage_models.py convert Qwen/Qwen2.5-0.5B-Instruct
 
 # Delete a model to free disk space:
 python manage_models.py delete Gemma-4-E4B
@@ -214,7 +214,7 @@ python manage_models.py delete Gemma-4-E4B
 
 > [!TIP]
 > **Pre-Converted Models vs. Local Conversion**:
-> Whenever possible, download official pre-converted models from the `OpenVINO/` namespace on Hugging Face (e.g. `OpenVINO/Llama-3.2-3B-Instruct-int4-ov`, `OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int8-ov`). They are already optimized with Intel NNCF INT4/INT8 precision and download up to 10x faster without needing local compilation.
+> Whenever possible, download official pre-converted models from the `OpenVINO/` namespace on Hugging Face (e.g. `OpenVINO/Llama-3.2-3B-Instruct-int4-ov`, `OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int4-ov`). Models that are already in OpenVINO INT4 format are downloaded directly without unnecessary re-conversion. When converting raw models, the manager always converts them into optimized **INT4** format for Intel GPU and NPU acceleration.
 
 ---
 
