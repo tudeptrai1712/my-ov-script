@@ -6,6 +6,7 @@ import openvino_genai as ov_genai
 
 from .loading import LoadingScreen
 from .memory import MemoryMonitor, powershell_gpu_memory
+from .metadata import ModelMetadata, read_model_metadata
 from .ui import UI, human_bytes, progress_bar
 
 
@@ -37,12 +38,14 @@ class Chat:
         context_length: int,
         max_new_tokens: int,
         enable_reasoning: bool = False,
+        metadata: Optional[ModelMetadata] = None,
     ):
         self.model_path = model_path
         self.device = device
         self.context_length = context_length
         self.max_new_tokens = max_new_tokens
-        self.reasoning_enabled = enable_reasoning
+        self.metadata = metadata or read_model_metadata(model_path)
+        self.reasoning_enabled = enable_reasoning and self.metadata.supports_reasoning
 
         # ----------------------------------------------------
         # Memory monitoring
@@ -67,18 +70,17 @@ class Chat:
         loading.start()
 
         try:
-            # =================================================
-            # IMPORTANT:
-            #
-            # Use VLMPipeline for Gemma 4 / VLM-capable models.
-            #
-            # This avoids the LLMPipeline 3/4-input restriction
-            # that caused the original "you have 5 inputs" error.
-            # =================================================
-            self.pipe = ov_genai.VLMPipeline(
-                str(model_path),
-                device,
-            )
+            # Select pipeline based on model metadata (VLM vs text-only LLM)
+            if self.metadata.is_vlm:
+                self.pipe = ov_genai.VLMPipeline(
+                    str(model_path),
+                    device,
+                )
+            else:
+                self.pipe = ov_genai.LLMPipeline(
+                    str(model_path),
+                    device,
+                )
 
         except Exception:
             loading.stop()
@@ -186,6 +188,14 @@ class Chat:
 
     def toggle_reasoning(self, enable: Optional[bool] = None) -> bool:
         """Toggles or sets the reasoning/thinking mode state."""
+        if not self.metadata.supports_reasoning:
+            print(
+                f"\n{UI.YELLOW}Reasoning mode is not supported by model "
+                f"'{self.metadata.name}'.{UI.RESET}\n"
+            )
+            self.reasoning_enabled = False
+            return False
+
         if enable is None:
             self.reasoning_enabled = not self.reasoning_enabled
         else:
@@ -200,14 +210,21 @@ class Chat:
         """Prints current session and memory statistics."""
         used = self.context_usage()
         current_memory = self.memory_monitor.current
-        reason_status = (
-            f"{UI.GREEN}Enabled{UI.RESET}"
-            if self.reasoning_enabled
-            else f"{UI.YELLOW}Disabled{UI.RESET}"
-        )
+        if self.metadata.supports_reasoning:
+            reason_status = (
+                f"{UI.GREEN}Enabled{UI.RESET}"
+                if self.reasoning_enabled
+                else f"{UI.YELLOW}Disabled{UI.RESET}"
+            )
+        else:
+            reason_status = f"{UI.DIM}Not supported by model{UI.RESET}"
 
         print()
         print(f"{UI.BOLD}Model:{UI.RESET} {self.model_path.name}")
+        print(
+            f"{UI.BOLD}Type:{UI.RESET} {self.metadata.display_type} "
+            f"({self.metadata.precision.upper()})"
+        )
         print(f"{UI.BOLD}Device:{UI.RESET} {self.device}")
         print(f"{UI.BOLD}Reasoning:{UI.RESET} {reason_status}")
         print(f"{UI.BOLD}Context:{UI.RESET} {used:,} / {self.context_length:,}")

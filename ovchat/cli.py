@@ -9,12 +9,18 @@ from .config import (
     MODEL_ROOT,
 )
 from .devices import choose_device
+from .metadata import read_model_metadata
 from .models import choose_model
 from .ui import UI, clear_screen
 
 
-def choose_integer(label: str, default: int, minimum: int = 1) -> int:
-    """Interactively prompts for an integer value with validation."""
+def choose_integer(
+    label: str,
+    default: int,
+    minimum: int = 1,
+    maximum: Optional[int] = None,
+) -> int:
+    """Interactively prompts for an integer value with validation against min and optional max."""
     while True:
         value = input(f"{UI.CYAN}{label} [{default}]: {UI.RESET}").strip()
 
@@ -23,12 +29,17 @@ def choose_integer(label: str, default: int, minimum: int = 1) -> int:
 
         try:
             number = int(value)
-            if number >= minimum:
-                return number
+            if number < minimum:
+                print(f"{UI.YELLOW}Enter an integer >= {minimum}.{UI.RESET}")
+                continue
+            if maximum is not None and number > maximum:
+                print(f"{UI.YELLOW}Enter an integer <= {maximum:,}.{UI.RESET}")
+                continue
+            return number
         except ValueError:
             pass
 
-        print(f"{UI.YELLOW}Enter an integer >= {minimum}.{UI.RESET}")
+        print(f"{UI.YELLOW}Invalid number.{UI.RESET}")
 
 
 def choose_boolean(label: str, default: bool = False) -> bool:
@@ -61,13 +72,28 @@ def main() -> None:
     if model_path is None:
         return
 
-    print()
+    # Read model metadata
+    metadata = read_model_metadata(model_path)
+    print(
+        f"{UI.DIM}Model type: {metadata.display_type} "
+        f"| Precision: {metadata.precision.upper()}{UI.RESET}\n"
+    )
 
-    # 2. Context length
+    # 2. Context length (bounded by model metadata if available)
+    if metadata.max_position_embeddings:
+        default_ctx = min(DEFAULT_CONTEXT, metadata.max_position_embeddings)
+        max_ctx = metadata.max_position_embeddings
+        ctx_label = f"Context length (max: {max_ctx:,})"
+    else:
+        default_ctx = DEFAULT_CONTEXT
+        max_ctx = None
+        ctx_label = "Context length"
+
     context_length = choose_integer(
-        "Context length",
-        DEFAULT_CONTEXT,
+        ctx_label,
+        default=default_ctx,
         minimum=256,
+        maximum=max_ctx,
     )
 
     print()
@@ -81,28 +107,36 @@ def main() -> None:
 
     print()
 
-    # 4. Hardware device selection
-    device = choose_device()
+    # 4. Hardware device selection (incompatible devices are hidden based on metadata)
+    device = choose_device(metadata)
     if device is None:
         return
 
     print()
 
-    # 5. Reasoning mode
-    enable_reasoning = choose_boolean(
-        "Enable reasoning / thinking mode?",
-        default=DEFAULT_ENABLE_REASONING,
-    )
-
-    print()
+    # 5. Reasoning mode (hidden if model does not support reasoning)
+    if metadata.supports_reasoning:
+        enable_reasoning = choose_boolean(
+            "Enable reasoning / thinking mode?",
+            default=DEFAULT_ENABLE_REASONING,
+        )
+        print()
+    else:
+        enable_reasoning = False
 
     # 6. Configuration summary
     print(f"{UI.BOLD}Configuration{UI.RESET}")
     print(f"  Model    : {model_path.name}")
+    print(f"  Type     : {metadata.display_type} ({metadata.precision.upper()})")
     print(f"  Context  : {context_length:,}")
     print(f"  Output   : {max_new_tokens:,}")
     print(f"  Device   : {device}")
-    print(f"  Reasoning: {'Enabled' if enable_reasoning else 'Disabled'}\n")
+
+    if metadata.supports_reasoning:
+        reason_label = "Enabled" if enable_reasoning else "Disabled"
+    else:
+        reason_label = "Not supported by model"
+    print(f"  Reasoning: {reason_label}\n")
 
     input("Press Enter to load...")
 
@@ -114,6 +148,7 @@ def main() -> None:
             context_length=context_length,
             max_new_tokens=max_new_tokens,
             enable_reasoning=enable_reasoning,
+            metadata=metadata,
         )
     except Exception as e:
         print(f"\n{UI.RED}Failed to load model:{UI.RESET}\n")
@@ -125,15 +160,17 @@ def main() -> None:
     clear_screen()
     print(f"{UI.BOLD}{UI.GREEN}OpenVINO model loaded.{UI.RESET}\n")
     print(f"Model    : {model_path.name}")
+    print(f"Type     : {metadata.display_type}")
     print(f"Device   : {device}")
-    print(f"Reasoning: {'Enabled' if enable_reasoning else 'Disabled'}")
+    print(f"Reasoning: {reason_label}")
     print(f"Context  : {context_length:,}")
     print(f"Max output: {max_new_tokens:,}\n")
 
     print(f"{UI.DIM}Commands:{UI.RESET}")
     print("  /clear  - clear conversation")
     print("  /info   - show model/memory info")
-    print("  /think  - toggle reasoning mode (or /think on, /think off)")
+    if metadata.supports_reasoning:
+        print("  /think  - toggle reasoning mode (or /think on, /think off)")
     print("  /quit   - exit\n")
 
     chat.run()
@@ -141,4 +178,3 @@ def main() -> None:
     # 9. Clean shutdown
     chat.memory_monitor.stop()
     print(f"\n{UI.GREEN}Goodbye.{UI.RESET}")
-
