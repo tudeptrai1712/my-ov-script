@@ -24,6 +24,43 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+# ------------------------------------------------------------
+# DEPENDENCY VERIFIER (Self-healing on launch)
+# ------------------------------------------------------------
+
+def _verify_dependencies() -> None:
+    required = [
+        ("openvino", "openvino"),
+        ("openvino_genai", "openvino-genai"),
+        ("numpy", "numpy"),
+        ("PIL", "Pillow"),
+        ("pypdf", "pypdf"),
+    ]
+    missing = []
+    for mod, pkg in required:
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(pkg)
+
+    if missing:
+        print("\n" + "=" * 60)
+        print("  [Dependency Verifier] Installing missing packages...")
+        print(f"  Packages: {', '.join(missing)}")
+        print("=" * 60 + "\n")
+        for pkg in missing:
+            print(f"Installing {pkg}...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+                print(f"  [OK] {pkg} installed.")
+            except Exception as e:
+                print(f"  [!] Failed to install {pkg}: {e}")
+        print("\n[Dependency Verifier] Verification complete.\n")
+    else:
+        print("[Dependency Verifier] Checking required packages... All dependencies satisfied [OK]")
+
+_verify_dependencies()
+
 import openvino as ov
 import openvino_genai as ov_genai
 

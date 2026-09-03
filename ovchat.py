@@ -5,11 +5,26 @@ Delegates execution to either the CLI interface or the Web UI.
 Usage:
     python ovchat.py          # Start CLI
     python ovchat.py --web    # Start Web UI
+    python ovchat.py --deps   # Check dependency status
 """
 
 import sys
 
+# 1. Automatic dependency verification (installs missing packages on launch)
+from ovchat.verifier import print_dependency_status, verify_dependencies
+
 if __name__ == "__main__":
+    if "--deps" in sys.argv or "--check-deps" in sys.argv or "--status" in sys.argv:
+        print_dependency_status()
+        sys.exit(0)
+
+    # Ensure all required packages are present before running
+    ok, missing = verify_dependencies(auto_install=True)
+    if not ok:
+        print(f"\n[Dependency Verifier] Could not resolve: {missing}. Please install manually.\n")
+        sys.exit(1)
+
+    # 2. Launch requested interface
     if "--web" in sys.argv:
         import uvicorn
         port = 8080
