@@ -2,8 +2,9 @@
 
 from .chat import Chat
 from .cli import main
-from .config import MODEL_ROOT
+from .config import CHAT_HISTORY_DIR, MODEL_ROOT
 from .devices import get_devices
+from .history import ChatHistorySaver
 from .metadata import ModelMetadata, read_model_metadata
 from .models import find_models
 
@@ -16,5 +17,7 @@ __all__ = [
     "get_devices",
     "ModelMetadata",
     "read_model_metadata",
+    "ChatHistorySaver",
     "MODEL_ROOT",
+    "CHAT_HISTORY_DIR",
 ]

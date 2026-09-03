@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import openvino_genai as ov_genai
 
+from .history import ChatHistorySaver
 from .loading import LoadingScreen
 from .memory import MemoryMonitor, powershell_gpu_memory
 from .metadata import ModelMetadata, read_model_metadata
@@ -46,6 +47,16 @@ class Chat:
         self.max_new_tokens = max_new_tokens
         self.metadata = metadata or read_model_metadata(model_path)
         self.reasoning_enabled = enable_reasoning and self.metadata.supports_reasoning
+
+        # ----------------------------------------------------
+        # Persistent chat history saving
+        # ----------------------------------------------------
+        self.history_saver = ChatHistorySaver(
+            model_name=self.model_path.name,
+            device=self.device,
+            context_length=self.context_length,
+            reasoning_enabled=self.reasoning_enabled,
+        )
 
         # ----------------------------------------------------
         # Memory monitoring
@@ -181,10 +192,12 @@ class Chat:
         return self.context_usage()
 
     def clear(self) -> None:
-        """Clears conversation history."""
+        """Clears conversation history and begins a new history log file."""
         self.history_messages.clear()
         self.chat_history = ov_genai.ChatHistory()
-        print(f"\n{UI.GREEN}Conversation cleared.{UI.RESET}\n")
+        self.history_saver.reset()
+        print(f"\n{UI.GREEN}Conversation cleared.{UI.RESET}")
+        print(f"{UI.DIM}New history log: {self.history_saver.session_file}{UI.RESET}\n")
 
     def toggle_reasoning(self, enable: Optional[bool] = None) -> bool:
         """Toggles or sets the reasoning/thinking mode state."""
@@ -230,6 +243,7 @@ class Chat:
         print(f"{UI.BOLD}Context:{UI.RESET} {used:,} / {self.context_length:,}")
         print(f"{UI.BOLD}Max output:{UI.RESET} {self.max_new_tokens:,}")
         print(f"{UI.BOLD}Load time:{UI.RESET} {self.load_time:.2f}s")
+        print(f"{UI.BOLD}History file:{UI.RESET} {self.history_saver.session_file}")
         print(f"{UI.BOLD}GPU/shared memory:{UI.RESET} {human_bytes(current_memory)}")
 
         if self.actual_memory_increase is not None:
@@ -319,6 +333,23 @@ class Chat:
         })
         self.rebuild_history()
 
+        # Persist turn to chat history file immediately
+        metrics_dict = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "throughput": throughput,
+            "ttft": ttft,
+        }
+        if tpot is not None:
+            metrics_dict["tpot"] = tpot
+
+        self.history_saver.add_turn(
+            user_prompt=prompt,
+            assistant_response=assistant_text,
+            metrics=metrics_dict,
+            reasoning_used=self.reasoning_enabled,
+        )
+
         # Context bar
         context_used = self.context_usage()
         context_percent = min((context_used / self.context_length) * 100, 100.0)
@@ -385,4 +416,6 @@ class Chat:
                 continue
 
             self.generate(prompt)
+
+        print(f"{UI.DIM}Chat transcript saved: {self.history_saver.session_file}{UI.RESET}")
 

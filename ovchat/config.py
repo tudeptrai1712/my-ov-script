@@ -24,3 +24,11 @@ DEFAULT_ENABLE_REASONING: bool = os.environ.get(
     "OVCHAT_ENABLE_REASONING", ""
 ).strip().lower() in ("1", "true", "yes")
 
+# Directory where chat history transcripts are always saved
+CHAT_HISTORY_DIR: Path = Path(
+    os.environ.get(
+        "OVCHAT_HISTORY_DIR",
+        r"D:\AI models\openvino-genai\chat history",
+    )
+)
+

@@ -164,7 +164,8 @@ def main() -> None:
     print(f"Device   : {device}")
     print(f"Reasoning: {reason_label}")
     print(f"Context  : {context_length:,}")
-    print(f"Max output: {max_new_tokens:,}\n")
+    print(f"Max output: {max_new_tokens:,}")
+    print(f"History  : {chat.history_saver.session_file}\n")
 
     print(f"{UI.DIM}Commands:{UI.RESET}")
     print("  /clear  - clear conversation")
