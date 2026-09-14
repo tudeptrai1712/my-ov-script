@@ -1,10 +1,11 @@
 """
 OpenVINO GenAI Chat runner.
-Delegates execution to either the CLI interface or the Web UI.
+Delegates execution to either the interactive CLI or the OpenAI-compatible API Server.
 
 Usage:
-    python ovchat.py          # Start CLI
-    python ovchat.py --web    # Start Web UI
+    python ovchat.py          # Start Interactive CLI
+    python ovchat.py --server # Start OpenAI-Compatible API Server (Port 8000)
+    python ovchat.py --kill   # Stop running API Server
     python ovchat.py --deps   # Check dependency status
 """
 
@@ -30,25 +31,13 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # 2. Launch requested interface
-    if "--server" in sys.argv or "--api" in sys.argv:
-        sys.argv = [a for a in sys.argv if a not in ("--server", "--api")]
+    if "--server" in sys.argv or "--api" in sys.argv or "--web" in sys.argv:
+        if "--web" in sys.argv:
+            print("\n[Notice] The custom Web UI has been removed in favor of the OpenAI-compatible API server.")
+            print("Starting the API server on port 8000 for Open WebUI (http://localhost:3000)...\n")
+        sys.argv = [a for a in sys.argv if a not in ("--server", "--api", "--web")]
         from run_server import main as run_server_main
         run_server_main()
-    elif "--web" in sys.argv:
-        print("\n[Notice] The custom built-in web UI on port 8080 is deprecated in favor of:")
-        print("  1. Starting the OpenAI-compatible API server on port 8000:  python run_server.py")
-        print("  2. Connecting via Open WebUI (http://localhost:3000) as documented in README.md.\n")
-        print("Starting legacy web UI for fallback...\n")
-        import uvicorn
-        port = 8080
-        host = "127.0.0.1"
-        for i, arg in enumerate(sys.argv):
-            if arg == "--port" and i + 1 < len(sys.argv):
-                port = int(sys.argv[i + 1])
-            elif arg == "--host" and i + 1 < len(sys.argv):
-                host = sys.argv[i + 1]
-
-        uvicorn.run("ovchat.web.app:app", host=host, port=port, log_level="info")
     else:
         from ovchat.cli import main
         from ovchat.ui import UI

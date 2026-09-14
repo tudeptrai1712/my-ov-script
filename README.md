@@ -2,18 +2,13 @@
 
 A high-performance local AI inference suite and OpenAI-compatible serving backend for [**OpenVINO GenAI (`openvinotoolkit/openvino.genai`)**](https://github.com/openvinotoolkit/openvino.genai), featuring dual **LLM** (Text) and **VLM** (Vision-Language) multimodal support, native Intel Arc GPU (XMX) acceleration, an interactive terminal CLI, and direct integration with [**Open WebUI**](https://github.com/open-webui/open-webui).
 
-> [!CAUTION]
-> **Web UI Code Deprecation Notice (Will Be Deleted Soon)**:
-> The custom standalone Web UI code (`run_web.py` and `ovchat/web/static/`) is **deprecated and will be deleted soon**. Please transition to the dedicated OpenAI-compatible API server (`python run_server.py` on port `8000`) paired with [Open WebUI](https://github.com/open-webui/open-webui) on port `3000`, or use the high-speed interactive CLI (`python ovchat.py`).
+> [!NOTE]
+> **Open WebUI Architecture & Intel Guide**:
+> In accordance with the official Intel tutorial [Demonstrating integration of Open WebUI with OpenVINO Model Server](https://docs.openvino.ai/2025/model-server/ovms_demos_integration_with_open_webui.html), local inference is served via a dedicated OpenAI-compatible API server (`python run_server.py` on port `8000`) and connected to a full-featured [Open WebUI](https://github.com/open-webui/open-webui) instance (on port `3000`). This gives you instant access to RAG, web search, document indexing, voice TTS, and conversation branching with native Windows Intel Arc acceleration.
 
 > [!WARNING]
 > **Intel NPU Advisory (Currently Not Working)**:
 > Intel NPU execution is **currently not working / unstable** in the current OpenVINO GenAI release. Please choose **`GPU`** (or `CPU`) as your target hardware device for all generation and chat workflows until upstream fixes are delivered.
-
-> [!NOTE]
-> **Open WebUI Architecture & Intel Guide**:
-> In accordance with the official Intel tutorial [Demonstrating integration of Open WebUI with OpenVINO Model Server](https://docs.openvino.ai/2025/model-server/ovms_demos_integration_with_open_webui.html), the standalone built-in HTML interface is **deprecated** in favor of running a dedicated OpenAI-compatible API server (`python run_server.py` on port `8000`) and connecting it to a full-featured [Open WebUI](https://github.com/open-webui/open-webui) instance (on port `3000`). This gives you full access to RAG, web search, document indexing, voice TTS, and conversation branching with native Windows Intel Arc acceleration.
-> In accordance with the official Intel tutorial [Demonstrating integration of Open WebUI with OpenVINO Model Server](https://docs.openvino.ai/2025/model-server/ovms_demos_integration_with_open_webui.html), the standalone built-in HTML interface is deprecated in favor of running a dedicated OpenAI-compatible API server (`python run_server.py` on port `8000`) and connecting it to a full-featured [Open WebUI](https://github.com/open-webui/open-webui) instance (on port `3000`). This gives you full access to RAG, web search, document indexing, voice TTS, and conversation branching with native Windows Intel Arc acceleration.
 
 > [!WARNING]
 > **Performance Notice (Web UI vs. CLI)**:
@@ -57,19 +52,17 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
   - Continuous sampling of **CPU**, **RAM**, **GPU Compute**, **Intel Arc XMX / Neural Engine**, **GPU 3D Engine**, and **Dedicated / Shared VRAM**.
   - Visualized via real-time progress bars in the sidebar and a compact glanceable top-nav telemetry pill.
 
-- **Console Web UI Kill & Stop Controls**:
-  - Type `q`, `quit`, `k`, or `kill` + `Enter` in the console to gracefully stop the web server.
-  - Kill running instances from any terminal via `python run_web.py --kill` or `python ovchat.py --kill-web`.
+- **Console Server Kill & Stop Controls**:
+  - Press `q` or `k` in the console, or type `quit` / `kill` + `Enter` to gracefully stop the API server.
+  - Kill running instances from any terminal via `python kill_server.py` or `python ovchat.py --kill`.
 
 - **Reasoning / Thinking Mode (`/think`)**:
   - Native support for reasoning models (Gemma 4, DeepSeek, etc.).
-  - Web UI renders thoughts inside a collapsible `<details>` container (`Thinking Process`), leaving answers neat.
-  - Live toggle via top-bar badge or CLI `/think on` / `/think off`.
+  - Live toggle via CLI `/think on` / `/think off` or configuration parameter prompt.
 
 - **Persistent Markdown Chat History**:
   - Automatically saves formatted sessions with YAML frontmatter, timestamps, token counts, throughput, and TTFT directly to:
     `D:\AI models\openvino-genai\chat history`
-  - Searchable sidebar history list with turn replay and chat deletion.
 
 - **Self-Healing Dependency Verifier**:
   - Automatically checks all required pip packages on every launch.
@@ -98,19 +91,16 @@ my ov script/
 │   ├── settings.py             # Persistent user settings manager (user_config.json)
 │   ├── chat.py                 # Multi-turn interactive chat engine & CLI commands
 │   ├── cli.py                  # CLI runner, menus, and launch sequence
-│   ├── manager.py              # Model downloader, converter (optimum-intel), and deletion
 │   ├── ui.py                   # ANSI terminal formatting & helpers
-│   └── web/                    # FastAPI backend with OpenAI-compatible endpoints
+│   └── web/                    # FastAPI OpenAI-compatible serving backend
 │       ├── __init__.py
 │       ├── __main__.py         # Run via python -m ovchat.web
-│       ├── app.py              # FastAPI server (OpenAI /v1 API + legacy endpoints)
-│       └── static/             # Legacy standalone web assets
+│       └── app.py              # FastAPI server (OpenAI /v1 API: models & chat completions)
 ├── requirements.txt            # Python dependencies
 ├── user_config.json            # Auto-persisted user preferences
-├── manage_models.py            # Model management CLI (download/convert/delete)
+├── kill_server.py              # Instant server terminator (Port 8000)
 ├── run_server.py               # Dedicated OpenAI-compatible API server (Port 8000)
-├── ovchat.py                   # Primary entry point (CLI, server, manager)
-├── run_web.py                  # Legacy standalone web UI runner (Port 8080)
+├── ovchat.py                   # Primary entry point (CLI & server)
 └── ovchat_fallback.py          # Standalone single-file fallback script
 ```
 
@@ -249,40 +239,7 @@ Inspect all packages and their exact installed versions:
 
 ```bash
 python ovchat.py --deps
-# or
-python run_web.py --status
 ```
-
----
-
-## Web UI Guide
-## Web UI Guide (Legacy - Will Be Deleted Soon)
-
-> [!CAUTION]
-> The custom standalone Web UI code is **deprecated and scheduled for deletion**. Please use `run_server.py` on port 8000 connected to Open WebUI on port 3000 instead.
-
-### Top Navigation Bar
-- **Model Display Badge**: Shows active model name, hardware device (`GPU`, `CPU`), and type (`VLM` / `LLM`). Click to open Model Configuration.
-- **⏏ Eject Button**: Instantly unloads the model and frees GPU VRAM.
-- **Thinking Toggle**: Click to toggle reasoning mode (`ON` / `OFF`) in real time.
-- **Clear Chat**: Clears current conversation history.
-
-### Universal Attachments
-- **Paperclip `📎` Button**: Click to select any document (`.pdf`, `.txt`, `.py`, `.json`, `.csv`) or image (`.png`, `.jpg`, `.webp`).
-- **Clipboard Paste (`Ctrl+V`)**: Paste screenshots or images directly into the chat prompt.
-- **Drag & Drop**: Drag files from Windows Explorer directly onto the chat area.
-- Staged files appear in the attachment bar with badges, file sizes, and `×` removal buttons.
-
-### Output Actions
-- **📋 Copy**: Copies the full answer markdown to your clipboard with a confirmation badge.
-- **🔄 Retry**: Regenerates the current turn.
-
-### Settings Modal (LM Studio Style)
-- **Model Selector**: Switch between discovered local models with disk size indicators.
-- **Hardware Target**: Choose `GPU`, `CPU`, or `NPU`. Incompatible devices (e.g. NPU for VLM) are disabled with explanatory tooltips.
-- **Generation Sliders**: Configure Context Length (bounded by model max), Max Output Tokens, Temperature, and Top-P.
-- **Save as Default**: Persists your choices to `user_config.json`.
-- **Apply & Load / Eject Model**: Compiles models on the fly.
 
 ---
 

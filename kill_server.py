@@ -1,5 +1,5 @@
 """
-Quick utility to terminate running OpenVINO API Server (Port 8000) or Web UI (Port 8080).
+Quick utility to terminate running OpenVINO API Server (Port 8000).
 
 Usage:
     python kill_server.py
@@ -13,12 +13,12 @@ from run_server import kill_server_on_port
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Kill running OpenVINO GenAI servers")
-    parser.add_argument("--port", type=int, default=None, help="Specific port to terminate (default: checks 8000 and 8080)")
+    parser.add_argument("--port", type=int, default=None, help="Specific port to terminate (default: 8000)")
     parser.add_argument("--kill", "--stop", action="store_true", help="Kill active servers")
     parser.add_argument("--kill-server", "--stop-server", "--kill-web", action="store_true", help="Kill active servers")
     args, _ = parser.parse_known_args(argv)
 
-    ports_to_check = [args.port] if args.port else [8000, 8080]
+    ports_to_check = [args.port] if args.port else [8000]
     total_killed = 0
 
     print("\n" + "=" * 62)
