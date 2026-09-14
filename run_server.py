@@ -206,6 +206,7 @@ def main():
     parser.add_argument("--status", action="store_true", help="Display dependency check status")
     parser.add_argument("--kill", "--stop", action="store_true", help="Kill any existing API server on port and exit")
 
+    args = parser.parse_args()
     args, _ = parser.parse_known_args()
 
     if args.status:

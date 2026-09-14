@@ -551,6 +551,7 @@ def create_app() -> FastAPI:
             model_objects.append({
                 "id": m.name,
                 "object": "model",
+                "created": int(time.time()),
                 "created": now_ts,
                 "owned_by": "openvino",
                 "permission": [],
@@ -584,6 +585,7 @@ def create_app() -> FastAPI:
         settings = load_settings()
         root = Path(settings.get("model_root", MODEL_ROOT))
         models = [m.name for m in find_models(root)]
+        if model_id not in models:
 
         clean_name = model_id
         for suffix in (" (GPU)", " (CPU)", ":GPU", ":CPU", "/gpu", "/cpu"):
@@ -616,10 +618,16 @@ def create_app() -> FastAPI:
         root = Path(settings.get("model_root", MODEL_ROOT))
         available_models = [m.name for m in find_models(root)]
 
+        if not req_model and available_models:
+            req_model = available_models[0]
         # Extract device target from model name if present
         target_dev = None
         clean_model_name = req_model or ""
 
+        if req_model and req_model in available_models:
+            # Auto-load or switch model if needed
+            if not session.is_loaded() or session.model_name != req_model:
+                dev = settings.get("selected_device", "GPU")
         for suffix, dev_val in [
             (" (GPU)", "GPU"),
             (" (CPU)", "CPU"),
@@ -643,6 +651,8 @@ def create_app() -> FastAPI:
             # Auto-load or switch model/device if needed
             if not session.is_loaded() or session.model_name != clean_model_name or session.device != target_dev:
                 await load_model(LoadModelRequest(
+                    model_name=req_model,
+                    device=dev,
                     model_name=clean_model_name,
                     device=target_dev,
                     temperature=temperature,
