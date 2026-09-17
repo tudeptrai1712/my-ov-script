@@ -8,6 +8,7 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
 
 > [!WARNING]
 > **Intel NPU Advisory (Currently Not Working)**:
+> Intel NPU execution is **currently not working / unstable** in the current OpenVINO GenAI release. Please choose **`GPU`** (or `CPU`) as your target hardware device for all generation and chat workflows until upstream fixes are delivered.
 > Intel NPU execution is **currently not working / unstable** in the current OpenVINO GenAI release (`NPU compiler does not support platform 'AUTO_DETECT' for architecture 5010`). The NPU option is disabled by default. Please select **`GPU`** (Intel Arc) or **`CPU`** as your target hardware device for all generation and chat workflows until upstream Intel compiler fixes are released.
 
 > [!WARNING]
@@ -18,6 +19,8 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
 > **Intel Hardware Requirements (Intel Hardware Only)**:
 > This application is specifically tailored for Intel hardware architectures:
 > - **GPU**: Requires **Intel Alchemist (1st Gen Arc / Xe-HPG) or newer** (including Battlemage B-series, Meteor Lake Xe-LPG, and Lunar Lake / Arrow Lake Xe2). Older graphics generations (Intel UHD, early Iris Xe) lack the required Matrix/DPAS instructions and will either run slowly or fail compilation.
+> - **NPU**: Requires an integrated Intel Neural Processing Unit on **Intel Core Ultra Series 1 (Meteor Lake) and newer**, or **Intel Core Series 3 and newer**. Note that in OpenVINO GenAI, VLMs (vision-language models) require GPU or CPU; the NPU is supported for compatible text-only causal LLMs.
+> - **NPU**: Currently **not working / disabled** due to upstream runtime instability. Please select **`GPU`** or **`CPU`**.
 > - **NPU**: Integrated Intel Neural Processing Unit on Core Ultra Series 1 (Meteor Lake) and newer. Note: NPU is currently **temporarily disabled** due to upstream compiler driver errors.
 
 ---
@@ -27,8 +30,11 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
 - **Dual LLM & VLM Multimodal Support**:
   - Automatically identifies model architecture via metadata inspection.
   - Dynamically activates `VLMPipeline` for multimodal vision models (e.g., Gemma-4-E4B) and `LLMPipeline` for text models (Llama, Qwen, Mistral, DeepSeek).
+  - Attach images via paperclip file picker, clipboard paste (`Ctrl+V`), drag & drop, or CLI `/image <path>`.
   - Attach images via `/image <path>` in CLI or via paperclip / paste in Open WebUI.
 
+- **Universal File & Document Extraction**:
+  - Upload documents (`.pdf`, `.txt`, `.py`, `.json`, `.csv`, `.md`, `.log`, `.yaml`, etc.).
 - **Direct Open WebUI Serving (OpenAI-Compatible FastAPI Backend)**:
   - Serves local models via OpenAI `/v1` endpoints (`/v1/models`, `/v1/chat/completions`) with full streaming support.
   - Defaults to high-speed Intel Arc GPU execution.
@@ -37,8 +43,11 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
 - **Universal Document & Inline Attachment Extraction**:
   - Supports documents (`.pdf`, `.txt`, `.py`, `.json`, `.csv`, `.md`, `.log`, etc.).
   - Built-in PDF parser powered by `pypdf` extracts page-by-page text context directly into the prompt.
+  - Multi-file staging with thumbnail cards and one-click removal.
   - Supports inline document attachments in prompts (e.g. `/file report.pdf <prompt>`).
 
+- **LM Studio-Style Model Load / Unload & Eject**:
+  - **⏏ Eject Button** in top navigation header, sidebar, and settings modal.
 - **Flexible One-Shot Prompt & Answer Export (`/export`)**:
   - Generate answers and export directly to a text file in one command:  
     `/export "prompt (incl /file doc.pdf)" "output.txt"`
@@ -47,7 +56,22 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
 
 - **Dynamic Model Load / Unload & Eject**:
   - Frees GPU VRAM and system memory on demand (`gc.collect()`).
+  - Swap models dynamically in Web UI or via CLI `/load` and `/unload` commands without restarting Python.
   - Swap models dynamically via CLI `/load` and `/unload` commands without restarting Python.
+
+- **ChatGPT-Style Markdown & Table Rendering**:
+  - 100% offline GitHub Flavored Markdown (GFM) powered by bundled `marked.js`.
+  - Crisp tables with distinct headers, zebra-striped rows, borders, and hover effects.
+  - Code blocks with language badges and instant `"Copy"` buttons.
+  - Structured typography (headings, blockquotes, ordered/unordered lists).
+
+- **Output Action Bar (Copy & Retry)**:
+  - **Copy**: One-click clipboard copy of clean output (internal reasoning tokens automatically filtered).
+  - **Retry**: Regenerate any turn on the fly with the original prompt, attachments, and configuration.
+
+- **Real-Time Hardware Telemetry**:
+  - Continuous sampling of **CPU**, **RAM**, **GPU Compute**, **Intel Arc XMX / Neural Engine**, **GPU 3D Engine**, and **Dedicated / Shared VRAM**.
+  - Visualized via real-time progress bars in the sidebar and a compact glanceable top-nav telemetry pill.
 
 - **Console Server Kill & Stop Controls**:
   - Press `q` or `k` in the console, or type `quit` / `kill` + `Enter` to gracefully stop the API server.
@@ -67,6 +91,7 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
   - Takes only ~10 ms when all packages are installed.
 
 - **Standalone Single-File Fallback Script**:
+  - [`ovchat_fallback.py`](ovchat_fallback.py) is a completely self-contained single file with zero local module dependencies, containing full LLM/VLM, document/image upload, reasoning, memory tracking, and chat logging.
   - [`ovchat_fallback.py`](ovchat_fallback.py) is a completely self-contained single file with zero local module dependencies, containing full LLM/VLM, document/image upload, `/export` command, reasoning, memory tracking, and chat logging.
 
 ---
@@ -108,6 +133,7 @@ my ov script/
 - **Python**: 3.10 – 3.14 (64-bit)
 - **Hardware**:
   - Intel Arc GPU (Alchemist or newer, e.g. Arc A-series, B-series B390/B580, Core Ultra Xe-LPG/Xe2)
+  - Intel NPU (Core Ultra Series 1+, Core Series 3+)
   - Intel CPU (x86_64 with AVX2/AVX512/AMX)
 - **Operating System**: Windows 10/11 or Linux
 
@@ -125,6 +151,7 @@ pip install -r requirements.txt
 
 ### 1. Launching the OpenAI-Compatible API Server (Port 8000)
 
+Start the high-performance local server:
 Start the local server backend:
 
 ```bash
@@ -135,21 +162,26 @@ python ovchat.py --server
 # Optional flags:
 python run_server.py --device GPU        # Force Intel Arc GPU inference (default)
 python run_server.py --device CPU        # Force CPU inference
+python run_server.py --device GPU        # Force Intel Arc GPU inference
 python run_server.py -y                  # Skip parameter confirmation prompt
 python run_server.py --kill              # Stop running server
 ```
 
+- **Load Parameter Confirmation**: When launched interactively, the server displays current parameters (Device, Context Length, Max Tokens, Temperature, Top-P, Reasoning) and lets you change them before startup.
 - **Load Parameter Confirmation**: When launched interactively, the server displays current parameters (Device, Context Length, Max Tokens, Temperature, Top-P, Reasoning) and prompts whether you'd like to adjust them before startup.
 - **Default Device**: Intel Arc **GPU** is the recommended default.
 - **OpenAI API Base URL**: `http://127.0.0.1:8000/v1`
+- **Models List Endpoint**: `http://127.0.0.1:8000/v1/models` (exposes both default, `(GPU)`, and `(CPU)` model entries for selection in Open WebUI)
 - **Models List Endpoint**: `http://127.0.0.1:8000/v1/models`
 - **Chat Completions**: `http://127.0.0.1:8000/v1/chat/completions`
+- **To stop the server**: Press `q` or `k` in console, type `quit`, or run `python kill_server.py`.
 - **Stopping the Server**: Press `q` or `k` in the server terminal, type `quit`, or run `python kill_server.py`.
 
 ---
 
 ### 2. Setting Up & Connecting Open WebUI (Port 3000)
 
+Following the [OpenVINO Open WebUI Integration Demo](https://docs.openvino.ai/2025/model-server/ovms_demos_integration_with_open_webui.html), launch Open WebUI using either method:
 Following the [OpenVINO Open WebUI Integration Guide](https://docs.openvino.ai/2025/model-server/ovms_demos_integration_with_open_webui.html), launch Open WebUI:
 
 #### Option A: Via Python / Pip (Recommended on Windows)
@@ -186,12 +218,49 @@ python ovchat.py
 The interactive CLI will:
 1. Auto-verify dependencies.
 2. Let you select any model from `D:\AI models\openvino-genai`.
+3. Filter compatible hardware (Intel Arc GPU, CPU, NPU).
 3. Filter compatible hardware (Intel Arc GPU, CPU).
 4. Run with maximum raw tokens/second throughput.
 
 ---
 
+### 4. Managing Models (Download, Convert & Delete)
 ### 4. Standalone Fallback Script
+
+Use the dedicated model manager to inspect disk usage, download pre-converted OpenVINO models, convert raw Hugging Face models, or safely delete models:
+If you ever need a 100% self-contained single script requiring no package folders:
+
+#### Interactive Menu
+```bash
+python manage_models.py
+# or using the main runner:
+python ovchat.py --manage
+python ovchat_fallback.py
+```
+
+#### Command-Line Operations:
+```bash
+# List local models with sizes, precision, and supported devices
+python manage_models.py list
+
+# Download a pre-converted OpenVINO INT4 model from Hugging Face:
+python manage_models.py download OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int4-ov
+
+# Convert and export a raw Hugging Face model or local directory to OpenVINO INT4:
+python manage_models.py convert Qwen/Qwen2.5-0.5B-Instruct
+
+# Delete a model to free disk space:
+python manage_models.py delete Gemma-4-E4B
+```
+
+> [!TIP]
+> **Pre-Converted Models vs. Local Conversion**:
+> Whenever possible, download official pre-converted models from the `OpenVINO/` namespace on Hugging Face (e.g. `OpenVINO/Llama-3.2-3B-Instruct-int4-ov`, `OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int4-ov`). Models that are already in OpenVINO INT4 format are downloaded directly without unnecessary re-conversion. When converting raw models, the manager always converts them into optimized **INT4** format for Intel GPU and NPU acceleration.
+
+---
+
+### 5. Standalone Fallback Script
+### 5. Checking Dependency Health
 
 If you ever need a 100% self-contained single script requiring no package folders:
 
@@ -199,9 +268,7 @@ If you ever need a 100% self-contained single script requiring no package folder
 python ovchat_fallback.py
 ```
 
----
-
-### 5. Checking Dependency Health
+### 6. Checking Dependency Health
 
 Inspect all packages and their exact installed versions:
 
@@ -222,6 +289,7 @@ While chatting in the terminal (`python ovchat.py` or `python ovchat_fallback.py
 | `/file <path>` | Attaches a file or PDF document context to your next prompt |
 | `/image <path>` | Attaches an image file for vision understanding (VLMs only) |
 | `/think` | Toggles reasoning mode (`/think on` or `/think off`) |
+| `/export [file.txt]` | Exports the last model answer to a `.txt` file |
 | `/export ["prompt" "file.txt"]` | Runs prompt (supports inline `/file`), streams output, and saves answer directly to `.txt` |
 | `/export [file.txt]` | Exports the **last generated** assistant answer to a `.txt` file |
 | `/export-chat [file.txt]` | Exports the entire chat conversation to a `.txt` file |
@@ -276,3 +344,4 @@ User defaults are saved automatically in [`user_config.json`](user_config.json).
 ## License
 
 MIT License. Feel free to use and modify for your own local AI workflows!
+

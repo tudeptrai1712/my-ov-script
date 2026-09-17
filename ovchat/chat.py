@@ -1,8 +1,9 @@
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
+import openvino as ov
 import openvino_genai as ov_genai
 
 from .history import ChatHistorySaver
@@ -10,6 +11,23 @@ from .loading import LoadingScreen
 from .memory import MemoryMonitor, powershell_gpu_memory
 from .metadata import ModelMetadata, read_model_metadata
 from .ui import UI, human_bytes, progress_bar
+
+
+def sanitize_file_path(raw: Union[str, Path]) -> Path:
+    """
+    Sanitizes file paths from CLI inputs, clipboard pastes, and tab completions.
+    Handles trailing backslashes/quotes, PowerShell '& ' prefixes, etc.
+    """
+    if isinstance(raw, Path):
+        s = str(raw)
+    else:
+        s = str(raw).strip()
+    if s.startswith("&"):
+        s = s[1:].strip()
+    cleaned = s.replace('"', '').replace("'", '').strip()
+    cleaned = re.sub(r'^[\\/]+([a-zA-Z]:)', r'\1', cleaned)
+    cleaned = cleaned.rstrip('\\/').strip()
+    return Path(cleaned).expanduser()
 
 
 def count_tokens(tokenizer: Any, text: str) -> int:
@@ -272,10 +290,26 @@ class Chat:
             return prompt, None
 
         raw_file = match.group(2) or match.group(3)
-        file_path = Path(raw_file.strip('\"\''))
+        file_path = sanitize_file_path(raw_file)
         cleaned_prompt = prompt[:match.start()] + prompt[match.end():]
         cleaned_prompt = re.sub(r'\s+', ' ', cleaned_prompt).strip()
         return cleaned_prompt, file_path
+
+    @staticmethod
+    def extract_inline_image(prompt: str) -> Tuple[str, Optional[Path]]:
+        """
+        Detects if /image, /img, or /pic <path> is embedded within the prompt string.
+        Returns (cleaned_prompt, attached_image_path).
+        """
+        match = re.search(r'/(?:image|img|pic)\s+("([^"]+)"|(\S+))', prompt, re.IGNORECASE)
+        if not match:
+            return prompt, None
+
+        raw_img = match.group(2) or match.group(3)
+        img_path = sanitize_file_path(raw_img)
+        cleaned_prompt = prompt[:match.start()] + prompt[match.end():]
+        cleaned_prompt = re.sub(r'\s+', ' ', cleaned_prompt).strip()
+        return cleaned_prompt, img_path
 
     @staticmethod
     def parse_export_args(raw_args: str) -> Tuple[Optional[str], Optional[Path]]:
@@ -299,7 +333,7 @@ class Chat:
         if match1:
             prompt = match1.group(1).strip()
             filename = match1.group(3) or match1.group(4)
-            return prompt, Path(filename.strip('\"\''))
+            return prompt, sanitize_file_path(filename)
 
         # Pattern 2: "output.txt" prompt
         match2 = re.match(r'^"([^"]+\.(?:txt|md|log|json|csv|html))"\s+(.+)$', raw, re.IGNORECASE)
@@ -308,32 +342,33 @@ class Chat:
             prompt = match2.group(2).strip()
             if prompt.startswith('"') and prompt.endswith('"') and len(prompt) >= 2:
                 prompt = prompt[1:-1]
-            return prompt, Path(filename)
+            return prompt, sanitize_file_path(filename)
 
         # Pattern 3: output.txt prompt ...
         parts = raw.split(maxsplit=1)
-        first_token = parts[0].strip('\"\'')
-        if any(first_token.lower().endswith(ext) for ext in (".txt", ".md", ".log", ".json", ".csv", ".html")):
+        first_token = sanitize_file_path(parts[0])
+        if any(str(first_token).lower().endswith(ext) for ext in (".txt", ".md", ".log", ".json", ".csv", ".html")):
             if len(parts) > 1:
                 prompt = parts[1].strip()
                 if prompt.startswith('"') and prompt.endswith('"') and len(prompt) >= 2:
                     prompt = prompt[1:-1]
-                return prompt, Path(first_token)
+                return prompt, first_token
             else:
-                return None, Path(first_token)
+                return None, first_token
 
         # Pattern 4: prompt ... output.txt
         parts_r = raw.rsplit(maxsplit=1)
-        last_token = parts_r[-1].strip('\"\'')
-        if any(last_token.lower().endswith(ext) for ext in (".txt", ".md", ".log", ".json", ".csv")):
+        last_token = sanitize_file_path(parts_r[-1])
+        if any(str(last_token).lower().endswith(ext) for ext in (".txt", ".md", ".log", ".json", ".csv")):
             prompt = parts_r[0].strip()
             if prompt.startswith('"') and prompt.endswith('"') and len(prompt) >= 2:
                 prompt = prompt[1:-1]
-            return prompt, Path(last_token)
+            return prompt, last_token
 
         # Single word without space ending with file extension
-        if raw.lower().endswith((".txt", ".md", ".log")):
-            return None, Path(raw.strip('\"\''))
+        sanitized_single = sanitize_file_path(raw)
+        if any(str(sanitized_single).lower().endswith(ext) for ext in (".txt", ".md", ".log", ".json", ".csv")):
+            return None, sanitized_single
 
         # Fallback: treat entire string as prompt to be generated
         return raw.strip('\"\''), None
@@ -532,50 +567,89 @@ class Chat:
                         f"Images are only supported on VLMs.{UI.RESET}\n"
                     )
                     continue
-                if len(parts) > 1:
-                    raw_path = " ".join(parts[1:]).strip('\"\'')
-                    img_path = Path(raw_path)
-                    if not img_path.exists():
-                        print(f"\n{UI.RED}Image file not found: {img_path}{UI.RESET}\n")
-                        continue
-                    try:
-                        import numpy as np
-                        from PIL import Image
 
-                        pil_img = Image.open(img_path).convert("RGB")
-                        self.pending_image = ov.Tensor(np.array(pil_img))
-                        self.pending_image_path = str(img_path)
-                        print(
-                            f"\n{UI.GREEN}Image loaded: {img_path.name} "
-                            f"({pil_img.width}x{pil_img.height}). Type your prompt next.{UI.RESET}\n"
-                        )
-                    except Exception as ex:
-                        print(f"\n{UI.RED}Failed to load image: {ex}{UI.RESET}\n")
+                raw_args = prompt[len(root_cmd):].strip()
+                if not raw_args:
+                    print(f"{UI.YELLOW}Usage: /image <path/to/image.jpg> [optional prompt]{UI.RESET}")
+                    continue
+
+                prompt_text = ""
+                q_match = re.match(r'^"([^"]+)"\s*(.*)$', raw_args)
+                if q_match:
+                    img_path = sanitize_file_path(q_match.group(1))
+                    remaining = q_match.group(2).strip()
+                    if remaining and remaining not in ("\\", "/"):
+                        prompt_text = remaining
                 else:
-                    print(f"{UI.YELLOW}Usage: /image <path/to/image.jpg>{UI.RESET}")
+                    parts_args = raw_args.split(maxsplit=1)
+                    img_path = sanitize_file_path(parts_args[0])
+                    if len(parts_args) > 1:
+                        prompt_text = parts_args[1].strip()
+
+                if not img_path.exists():
+                    print(f"\n{UI.RED}Image file not found: {img_path}{UI.RESET}\n")
+                    continue
+
+                try:
+                    import numpy as np
+                    from PIL import Image
+
+                    pil_img = Image.open(img_path).convert("RGB")
+                    self.pending_image = ov.Tensor(np.array(pil_img))
+                    self.pending_image_path = str(img_path)
+                    print(
+                        f"\n{UI.GREEN}Image loaded: {img_path.name} "
+                        f"({pil_img.width}x{pil_img.height}).{UI.RESET}"
+                    )
+                    if prompt_text:
+                        print(f"{UI.BOLD}{UI.CYAN}Prompt:{UI.RESET} {prompt_text}\n")
+                        self.generate(prompt_text)
+                    else:
+                        print(f"{UI.DIM}Type your prompt next.{UI.RESET}\n")
+                except Exception as ex:
+                    print(f"\n{UI.RED}Failed to load image: {ex}{UI.RESET}\n")
                 continue
 
             if root_cmd in ("/file", "/doc", "/attach"):
-                if len(parts) > 1:
-                    raw_doc_path = " ".join(parts[1:]).strip('\"\'')
-                    doc_path = Path(raw_doc_path)
-                    if not doc_path.exists():
-                        print(f"\n{UI.RED}File not found: {doc_path}{UI.RESET}\n")
-                        continue
-                    try:
-                        from .files import extract_text_from_path
+                raw_args = prompt[len(root_cmd):].strip()
+                if not raw_args:
+                    print(f"{UI.YELLOW}Usage: /file <path/to/document.pdf or file.txt> [optional prompt]{UI.RESET}")
+                    continue
 
-                        text = extract_text_from_path(doc_path)
-                        self.pending_file_context = text
-                        self.pending_file_name = doc_path.name
-                        print(
-                            f"\n{UI.GREEN}Attached file: {doc_path.name} "
-                            f"({len(text):,} chars extracted). Type your prompt next.{UI.RESET}\n"
-                        )
-                    except Exception as ex:
-                        print(f"\n{UI.RED}Failed to extract file text: {ex}{UI.RESET}\n")
+                prompt_text = ""
+                q_match = re.match(r'^"([^"]+)"\s*(.*)$', raw_args)
+                if q_match:
+                    doc_path = sanitize_file_path(q_match.group(1))
+                    remaining = q_match.group(2).strip()
+                    if remaining and remaining not in ("\\", "/"):
+                        prompt_text = remaining
                 else:
-                    print(f"{UI.YELLOW}Usage: /file <path/to/document.pdf or file.txt>{UI.RESET}")
+                    parts_args = raw_args.split(maxsplit=1)
+                    doc_path = sanitize_file_path(parts_args[0])
+                    if len(parts_args) > 1:
+                        prompt_text = parts_args[1].strip()
+
+                if not doc_path.exists():
+                    print(f"\n{UI.RED}File not found: {doc_path}{UI.RESET}\n")
+                    continue
+
+                try:
+                    from .files import extract_text_from_path
+
+                    text = extract_text_from_path(doc_path)
+                    self.pending_file_context = text
+                    self.pending_file_name = doc_path.name
+                    print(
+                        f"\n{UI.GREEN}Attached file: {doc_path.name} "
+                        f"({len(text):,} chars extracted).{UI.RESET}"
+                    )
+                    if prompt_text:
+                        print(f"{UI.BOLD}{UI.CYAN}Prompt:{UI.RESET} {prompt_text}\n")
+                        self.generate(prompt_text)
+                    else:
+                        print(f"{UI.DIM}Type your prompt next.{UI.RESET}\n")
+                except Exception as ex:
+                    print(f"\n{UI.RED}Failed to extract file text: {ex}{UI.RESET}\n")
                 continue
 
             if root_cmd in ("/export", "/save", "/export-answer"):
@@ -597,6 +671,26 @@ class Chat:
                         except Exception as ex:
                             print(f"\n{UI.RED}Failed to read attached file: {ex}{UI.RESET}\n")
                             continue
+
+                    cleaned_prompt, inline_img = self.extract_inline_image(cleaned_prompt)
+                    if inline_img:
+                        if not self.metadata.is_vlm:
+                            print(f"\n{UI.YELLOW}Current model '{self.metadata.name}' is an LLM (text-only). Images are only supported on VLMs.{UI.RESET}\n")
+                        elif not inline_img.exists():
+                            print(f"\n{UI.RED}Attached image not found: {inline_img}{UI.RESET}\n")
+                            continue
+                        else:
+                            try:
+                                import numpy as np
+                                from PIL import Image
+
+                                pil_img = Image.open(inline_img).convert("RGB")
+                                self.pending_image = ov.Tensor(np.array(pil_img))
+                                self.pending_image_path = str(inline_img)
+                                print(f"\n{UI.GREEN}Attached image: {inline_img.name} ({pil_img.width}x{pil_img.height}).{UI.RESET}")
+                            except Exception as ex:
+                                print(f"\n{UI.RED}Failed to load attached image: {ex}{UI.RESET}\n")
+                                continue
 
                     if not export_path:
                         ts = time.strftime("%Y%m%d_%H%M%S")
@@ -703,6 +797,27 @@ class Chat:
                             print(f"\n{UI.RED}Failed to read attached file: {ex}{UI.RESET}\n")
                     else:
                         print(f"\n{UI.RED}Attached file not found: {inline_file}{UI.RESET}\n")
+
+            # Support inline /image embedded directly in regular prompt
+            if any(k in prompt.lower() for k in ("/image ", "/img ", "/pic ")):
+                if not self.metadata.is_vlm:
+                    print(f"\n{UI.YELLOW}Current model '{self.metadata.name}' is an LLM (text-only). Images are only supported on VLMs.{UI.RESET}\n")
+                else:
+                    prompt, inline_img = self.extract_inline_image(prompt)
+                    if inline_img:
+                        if inline_img.exists():
+                            try:
+                                import numpy as np
+                                from PIL import Image
+
+                                pil_img = Image.open(inline_img).convert("RGB")
+                                self.pending_image = ov.Tensor(np.array(pil_img))
+                                self.pending_image_path = str(inline_img)
+                                print(f"\n{UI.GREEN}Attached image: {inline_img.name} ({pil_img.width}x{pil_img.height}).{UI.RESET}")
+                            except Exception as ex:
+                                print(f"\n{UI.RED}Failed to load attached image: {ex}{UI.RESET}\n")
+                        else:
+                            print(f"\n{UI.RED}Attached image not found: {inline_img}{UI.RESET}\n")
 
             self.generate(prompt)
 
