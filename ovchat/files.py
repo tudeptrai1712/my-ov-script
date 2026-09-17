@@ -89,3 +89,87 @@ def format_attachments_context(files: List[Dict[str, str]]) -> str:
 
     return "\n\n".join(blocks)
 
+
+def parse_page_selection(selection: Optional[object], total_pages: int) -> List[int]:
+    """
+    Parses a page selection into a 0-indexed list of page indices.
+    Supports:
+      - None or 'all': all pages [0, 1, ..., total_pages-1]
+      - int (e.g. 1): [0]
+      - '1': [0]
+      - '1-3': [0, 1, 2]
+      - '1,3,4': [0, 2, 3]
+    """
+    if selection is None or str(selection).strip().lower() in ("all", "*", ""):
+        return list(range(total_pages))
+
+    if isinstance(selection, int):
+        idx = selection - 1
+        return [idx] if 0 <= idx < total_pages else []
+
+    if isinstance(selection, (list, tuple)):
+        out = []
+        for s in selection:
+            idx = int(s) - 1 if isinstance(s, int) or str(s).isdigit() else -1
+            if 0 <= idx < total_pages and idx not in out:
+                out.append(idx)
+        return sorted(out)
+
+    raw = str(selection).strip()
+    result = []
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    for p in parts:
+        if "-" in p:
+            sub = p.split("-", 1)
+            if sub[0].isdigit() and sub[1].isdigit():
+                start = max(1, int(sub[0]))
+                end = min(total_pages, int(sub[1]))
+                for i in range(start, end + 1):
+                    idx = i - 1
+                    if 0 <= idx < total_pages and idx not in result:
+                        result.append(idx)
+        elif p.isdigit():
+            idx = int(p) - 1
+            if 0 <= idx < total_pages and idx not in result:
+                result.append(idx)
+
+    return sorted(result) if result else list(range(total_pages))
+
+
+def render_pdf_to_images(
+    pdf_path: Path,
+    page_selection: Optional[object] = None,
+    scale: float = 1.75,
+    max_pages: int = 10,
+) -> List[Tuple[int, object]]:
+    """
+    Renders pages of a PDF into PIL Image objects using pypdfium2.
+    Returns list of tuples: [(page_number_1_indexed, PIL.Image), ...]
+    """
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        import subprocess, sys
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pypdfium2>=4.0.0"])
+        import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(pdf_path)
+    total_pages = len(pdf)
+    if total_pages == 0:
+        return []
+
+    indices = parse_page_selection(page_selection, total_pages)
+    if max_pages and len(indices) > max_pages:
+        indices = indices[:max_pages]
+
+    rendered = []
+    for idx in indices:
+        page = pdf[idx]
+        pil_img = page.render(scale=scale).to_pil()
+        rendered.append((idx + 1, pil_img))
+
+    return rendered
+

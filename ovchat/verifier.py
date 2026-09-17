@@ -54,6 +54,12 @@ REQUIRED_DEPENDENCIES: List[Dict[str, str]] = [
         "description": "PDF Document Parser",
     },
     {
+        "name": "pypdfium2",
+        "package": "pypdfium2>=4.0.0",
+        "module": "pypdfium2",
+        "description": "PDF Page Image Renderer (VLM)",
+    },
+    {
         "name": "httpx",
         "package": "httpx",
         "module": "httpx",

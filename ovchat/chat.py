@@ -160,11 +160,86 @@ class Chat:
         else:
             self.actual_memory_increase = None
 
-        # Multimodal image & file attachments state
-        self.pending_image: Optional[ov.Tensor] = None
-        self.pending_image_path: Optional[str] = None
+        # Multimodal image & file attachments state (supports multiple images and PDF pages)
+        self.pending_images: List[ov.Tensor] = []
+        self.pending_image_info: Optional[str] = None
         self.pending_file_context: Optional[str] = None
         self.pending_file_name: Optional[str] = None
+
+    @property
+    def pending_image(self) -> Optional[ov.Tensor]:
+        return self.pending_images[0] if self.pending_images else None
+
+    @pending_image.setter
+    def pending_image(self, val: Optional[ov.Tensor]) -> None:
+        if val is None:
+            self.pending_images = []
+        else:
+            self.pending_images = [val]
+
+    @property
+    def pending_image_path(self) -> Optional[str]:
+        return self.pending_image_info
+
+    @pending_image_path.setter
+    def pending_image_path(self, val: Optional[str]) -> None:
+        self.pending_image_info = val
+
+    def load_image_or_pdf(self, path: Path, page_spec: Optional[str] = None) -> bool:
+        """
+        Loads an image file (.jpg, .png, etc.) or renders pages of a .pdf into self.pending_images.
+        Returns True on success, False on failure.
+        """
+        if not self.metadata.is_vlm:
+            print(
+                f"\n{UI.YELLOW}Current model '{self.metadata.name}' is an LLM (text-only). "
+                f"Images/PDF visual inputs are only supported on VLMs.{UI.RESET}\n"
+            )
+            return False
+
+        if not path.exists():
+            print(f"\n{UI.RED}File not found: {path}{UI.RESET}\n")
+            return False
+
+        ext = path.suffix.lower()
+        if ext == ".pdf":
+            try:
+                from .files import render_pdf_to_images
+                print(f"{UI.DIM}Rendering PDF pages as visual images...{UI.RESET}")
+                rendered = render_pdf_to_images(path, page_selection=page_spec)
+                if not rendered:
+                    print(f"\n{UI.YELLOW}No pages could be rendered from: {path.name}{UI.RESET}\n")
+                    return False
+
+                import numpy as np
+                self.pending_images = [ov.Tensor(np.array(img)) for _, img in rendered]
+                pages_str = ", ".join(f"p.{p}" for p, _ in rendered)
+                first_w, first_h = rendered[0][1].size
+                self.pending_image_info = f"{path.name} ({len(rendered)} page(s): {pages_str})"
+                print(
+                    f"\n{UI.GREEN}[OK] Loaded {len(rendered)} page(s) from PDF: {path.name} "
+                    f"({pages_str}, ~{first_w}x{first_h}px).{UI.RESET}"
+                )
+                return True
+            except Exception as ex:
+                print(f"\n{UI.RED}Failed to process PDF as images: {ex}{UI.RESET}\n")
+                return False
+        else:
+            try:
+                import numpy as np
+                from PIL import Image
+
+                pil_img = Image.open(path).convert("RGB")
+                self.pending_images = [ov.Tensor(np.array(pil_img))]
+                self.pending_image_info = f"{path.name} ({pil_img.width}x{pil_img.height})"
+                print(
+                    f"\n{UI.GREEN}[OK] Image loaded: {path.name} "
+                    f"({pil_img.width}x{pil_img.height}).{UI.RESET}"
+                )
+                return True
+            except Exception as ex:
+                print(f"\n{UI.RED}Failed to load image: {ex}{UI.RESET}\n")
+                return False
 
     def rebuild_history(self) -> None:
         """Reconstructs ov_genai.ChatHistory from our tracked messages."""
@@ -296,20 +371,58 @@ class Chat:
         return cleaned_prompt, file_path
 
     @staticmethod
-    def extract_inline_image(prompt: str) -> Tuple[str, Optional[Path]]:
+    def parse_image_command_args(raw_args: str) -> Tuple[str, Optional[str], str]:
+        raw = raw_args.strip()
+        path_str = ''
+        remaining = ''
+        q_match = re.match(r'^"([^"]+)"\s*(.*)$', raw)
+        if q_match:
+            path_str = q_match.group(1)
+            remaining = q_match.group(2).strip()
+        else:
+            parts = raw.split(maxsplit=1)
+            path_str = parts[0]
+            remaining = parts[1].strip() if len(parts) > 1 else ''
+
+        page_spec = None
+        colon_match = re.search(r'\.pdf:([0-9,\-all]+)$', path_str, re.IGNORECASE)
+        if colon_match:
+            page_spec = colon_match.group(1)
+            path_str = path_str[:colon_match.start() + 4]
+
+        if path_str.lower().endswith('.pdf') and not page_spec and remaining:
+            rem_parts = remaining.split(maxsplit=1)
+            token = rem_parts[0].lower()
+            if re.match(r'^(?:all|\d+(?:-\d+)?|(?:\d+,)+\d+)$', token):
+                page_spec = token
+                remaining = rem_parts[1].strip() if len(rem_parts) > 1 else ''
+
+        if remaining in ('\\', '/'):
+            remaining = ''
+
+        return path_str, page_spec, remaining
+
+    @staticmethod
+    def extract_inline_image(prompt: str) -> Tuple[str, Optional[Path], Optional[str]]:
         """
-        Detects if /image, /img, or /pic <path> is embedded within the prompt string.
-        Returns (cleaned_prompt, attached_image_path).
+        Detects if /image, /img, /pic, /pdf-image, or /pdfimg <path> is embedded within the prompt string.
+        Returns (cleaned_prompt, attached_image_path, optional_page_spec).
         """
-        match = re.search(r'/(?:image|img|pic)\s+("([^"]+)"|(\S+))', prompt, re.IGNORECASE)
+        match = re.search(r'/(?:image|img|pic|pdf-image|pdfimg)\s+("([^"]+)"|(\S+))', prompt, re.IGNORECASE)
         if not match:
-            return prompt, None
+            return prompt, None, None
 
         raw_img = match.group(2) or match.group(3)
+        page_spec = None
+        colon_match = re.search(r'\.pdf:([0-9,\-all]+)$', raw_img, re.IGNORECASE)
+        if colon_match:
+            page_spec = colon_match.group(1)
+            raw_img = raw_img[:colon_match.start() + 4]
+
         img_path = sanitize_file_path(raw_img)
         cleaned_prompt = prompt[:match.start()] + prompt[match.end():]
         cleaned_prompt = re.sub(r'\s+', ' ', cleaned_prompt).strip()
-        return cleaned_prompt, img_path
+        return cleaned_prompt, img_path, page_spec
 
     @staticmethod
     def parse_export_args(raw_args: str) -> Tuple[Optional[str], Optional[Path]]:
@@ -415,10 +528,10 @@ class Chat:
                 "streamer": streamer,
                 "extra_context": {"enable_thinking": self.reasoning_enabled},
             }
-            if self.metadata.is_vlm and self.pending_image is not None:
-                kwargs["images"] = [self.pending_image]
-                self.pending_image = None
-                self.pending_image_path = None
+            if self.metadata.is_vlm and self.pending_images:
+                kwargs["images"] = self.pending_images
+                self.pending_images = []
+                self.pending_image_info = None
 
             result = self.pipe.generate(
                 self.chat_history,
@@ -560,54 +673,28 @@ class Chat:
                     self.toggle_reasoning()
                 continue
 
-            if root_cmd in ("/image", "/img", "/pic"):
+            if root_cmd in ("/image", "/img", "/pic", "/pdf-image", "/pdfimg"):
                 if not self.metadata.is_vlm:
                     print(
                         f"\n{UI.YELLOW}Current model '{self.metadata.name}' is an LLM (text-only). "
-                        f"Images are only supported on VLMs.{UI.RESET}\n"
+                        f"Images and PDF visual inputs are only supported on VLMs.{UI.RESET}\n"
                     )
                     continue
 
                 raw_args = prompt[len(root_cmd):].strip()
                 if not raw_args:
-                    print(f"{UI.YELLOW}Usage: /image <path/to/image.jpg> [optional prompt]{UI.RESET}")
+                    print(f"{UI.YELLOW}Usage: /image <path/to/image.jpg or document.pdf> [page(s)] [optional prompt]{UI.RESET}")
                     continue
 
-                prompt_text = ""
-                q_match = re.match(r'^"([^"]+)"\s*(.*)$', raw_args)
-                if q_match:
-                    img_path = sanitize_file_path(q_match.group(1))
-                    remaining = q_match.group(2).strip()
-                    if remaining and remaining not in ("\\", "/"):
-                        prompt_text = remaining
-                else:
-                    parts_args = raw_args.split(maxsplit=1)
-                    img_path = sanitize_file_path(parts_args[0])
-                    if len(parts_args) > 1:
-                        prompt_text = parts_args[1].strip()
+                path_str, page_spec, prompt_text = self.parse_image_command_args(raw_args)
+                img_path = sanitize_file_path(path_str)
 
-                if not img_path.exists():
-                    print(f"\n{UI.RED}Image file not found: {img_path}{UI.RESET}\n")
-                    continue
-
-                try:
-                    import numpy as np
-                    from PIL import Image
-
-                    pil_img = Image.open(img_path).convert("RGB")
-                    self.pending_image = ov.Tensor(np.array(pil_img))
-                    self.pending_image_path = str(img_path)
-                    print(
-                        f"\n{UI.GREEN}Image loaded: {img_path.name} "
-                        f"({pil_img.width}x{pil_img.height}).{UI.RESET}"
-                    )
+                if self.load_image_or_pdf(img_path, page_spec=page_spec):
                     if prompt_text:
                         print(f"{UI.BOLD}{UI.CYAN}Prompt:{UI.RESET} {prompt_text}\n")
                         self.generate(prompt_text)
                     else:
                         print(f"{UI.DIM}Type your prompt next.{UI.RESET}\n")
-                except Exception as ex:
-                    print(f"\n{UI.RED}Failed to load image: {ex}{UI.RESET}\n")
                 continue
 
             if root_cmd in ("/file", "/doc", "/attach"):
@@ -633,6 +720,17 @@ class Chat:
                     print(f"\n{UI.RED}File not found: {doc_path}{UI.RESET}\n")
                     continue
 
+                # If user explicitly requests PDF visual rendering on a VLM via --image / -i
+                if doc_path.suffix.lower() == ".pdf" and self.metadata.is_vlm and any(f in prompt_text.lower() for f in ("--image", "--as-image", "--as-images", "-i")):
+                    cleaned_p = re.sub(r'--(?:as-)?images?|-i', '', prompt_text, flags=re.IGNORECASE).strip()
+                    if self.load_image_or_pdf(doc_path):
+                        if cleaned_p:
+                            print(f"{UI.BOLD}{UI.CYAN}Prompt:{UI.RESET} {cleaned_p}\n")
+                            self.generate(cleaned_p)
+                        else:
+                            print(f"{UI.DIM}Type your prompt next.{UI.RESET}\n")
+                    continue
+
                 try:
                     from .files import extract_text_from_path
 
@@ -643,6 +741,9 @@ class Chat:
                         f"\n{UI.GREEN}Attached file: {doc_path.name} "
                         f"({len(text):,} chars extracted).{UI.RESET}"
                     )
+                    if doc_path.suffix.lower() == ".pdf" and self.metadata.is_vlm:
+                        print(f"{UI.DIM}(Tip: For math formulas/diagrams, use '/image {doc_path.name}' to process PDF pages as visual images){UI.RESET}")
+
                     if prompt_text:
                         print(f"{UI.BOLD}{UI.CYAN}Prompt:{UI.RESET} {prompt_text}\n")
                         self.generate(prompt_text)
@@ -672,25 +773,10 @@ class Chat:
                             print(f"\n{UI.RED}Failed to read attached file: {ex}{UI.RESET}\n")
                             continue
 
-                    cleaned_prompt, inline_img = self.extract_inline_image(cleaned_prompt)
+                    cleaned_prompt, inline_img, page_spec = self.extract_inline_image(cleaned_prompt)
                     if inline_img:
-                        if not self.metadata.is_vlm:
-                            print(f"\n{UI.YELLOW}Current model '{self.metadata.name}' is an LLM (text-only). Images are only supported on VLMs.{UI.RESET}\n")
-                        elif not inline_img.exists():
-                            print(f"\n{UI.RED}Attached image not found: {inline_img}{UI.RESET}\n")
+                        if not self.load_image_or_pdf(inline_img, page_spec=page_spec):
                             continue
-                        else:
-                            try:
-                                import numpy as np
-                                from PIL import Image
-
-                                pil_img = Image.open(inline_img).convert("RGB")
-                                self.pending_image = ov.Tensor(np.array(pil_img))
-                                self.pending_image_path = str(inline_img)
-                                print(f"\n{UI.GREEN}Attached image: {inline_img.name} ({pil_img.width}x{pil_img.height}).{UI.RESET}")
-                            except Exception as ex:
-                                print(f"\n{UI.RED}Failed to load attached image: {ex}{UI.RESET}\n")
-                                continue
 
                     if not export_path:
                         ts = time.strftime("%Y%m%d_%H%M%S")
@@ -799,25 +885,10 @@ class Chat:
                         print(f"\n{UI.RED}Attached file not found: {inline_file}{UI.RESET}\n")
 
             # Support inline /image embedded directly in regular prompt
-            if any(k in prompt.lower() for k in ("/image ", "/img ", "/pic ")):
-                if not self.metadata.is_vlm:
-                    print(f"\n{UI.YELLOW}Current model '{self.metadata.name}' is an LLM (text-only). Images are only supported on VLMs.{UI.RESET}\n")
-                else:
-                    prompt, inline_img = self.extract_inline_image(prompt)
-                    if inline_img:
-                        if inline_img.exists():
-                            try:
-                                import numpy as np
-                                from PIL import Image
-
-                                pil_img = Image.open(inline_img).convert("RGB")
-                                self.pending_image = ov.Tensor(np.array(pil_img))
-                                self.pending_image_path = str(inline_img)
-                                print(f"\n{UI.GREEN}Attached image: {inline_img.name} ({pil_img.width}x{pil_img.height}).{UI.RESET}")
-                            except Exception as ex:
-                                print(f"\n{UI.RED}Failed to load attached image: {ex}{UI.RESET}\n")
-                        else:
-                            print(f"\n{UI.RED}Attached image not found: {inline_img}{UI.RESET}\n")
+            if any(k in prompt.lower() for k in ("/image ", "/img ", "/pic ", "/pdf-image ", "/pdfimg ")):
+                prompt, inline_img, page_spec = self.extract_inline_image(prompt)
+                if inline_img:
+                    self.load_image_or_pdf(inline_img, page_spec=page_spec)
 
             self.generate(prompt)
 
