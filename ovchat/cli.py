@@ -175,6 +175,7 @@ def main() -> None:
         print("  /image  - attach image for vision understanding (/image <path>)")
     if metadata.supports_reasoning:
         print("  /think  - toggle reasoning mode (or /think on, /think off)")
+    print("  /export - export last model answer to txt file (/export [filename.txt])")
     print("  /unload - eject/unload model from memory (free VRAM)")
     print("  /load   - switch or load a model into session")
     print("  /quit   - exit\n")

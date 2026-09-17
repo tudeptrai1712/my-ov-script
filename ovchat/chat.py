@@ -1,6 +1,7 @@
+import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import openvino_genai as ov_genai
 
@@ -260,7 +261,84 @@ class Chat:
 
         print()
 
-    def generate(self, prompt: str) -> None:
+    @staticmethod
+    def extract_inline_file(prompt: str) -> Tuple[str, Optional[Path]]:
+        """
+        Detects if /file <path> is embedded within the prompt string.
+        Returns (cleaned_prompt, attached_file_path).
+        """
+        match = re.search(r'/file\s+("([^"]+)"|(\S+))', prompt, re.IGNORECASE)
+        if not match:
+            return prompt, None
+
+        raw_file = match.group(2) or match.group(3)
+        file_path = Path(raw_file.strip('\"\''))
+        cleaned_prompt = prompt[:match.start()] + prompt[match.end():]
+        cleaned_prompt = re.sub(r'\s+', ' ', cleaned_prompt).strip()
+        return cleaned_prompt, file_path
+
+    @staticmethod
+    def parse_export_args(raw_args: str) -> Tuple[Optional[str], Optional[Path]]:
+        """
+        Parses arguments passed to /export.
+        Supports:
+          - /export                                     -> (None, None) (export last answer to default file)
+          - /export output.txt                          -> (None, Path("output.txt")) (export last answer)
+          - /export "prompt" "output.txt"               -> ("prompt", Path("output.txt"))
+          - /export "prompt" output.txt                 -> ("prompt", Path("output.txt"))
+          - /export output.txt prompt                   -> ("prompt", Path("output.txt"))
+          - /export "output.txt" prompt                 -> ("prompt", Path("output.txt"))
+          - /export prompt output.txt                   -> ("prompt", Path("output.txt"))
+        """
+        raw = raw_args.strip()
+        if not raw:
+            return None, None
+
+        # Pattern 1: "prompt" "output.txt" or "prompt" output.txt
+        match1 = re.match(r'^"(.+)"\s+("([^"]+)"|(\S+))$', raw)
+        if match1:
+            prompt = match1.group(1).strip()
+            filename = match1.group(3) or match1.group(4)
+            return prompt, Path(filename.strip('\"\''))
+
+        # Pattern 2: "output.txt" prompt
+        match2 = re.match(r'^"([^"]+\.(?:txt|md|log|json|csv|html))"\s+(.+)$', raw, re.IGNORECASE)
+        if match2:
+            filename = match2.group(1).strip()
+            prompt = match2.group(2).strip()
+            if prompt.startswith('"') and prompt.endswith('"') and len(prompt) >= 2:
+                prompt = prompt[1:-1]
+            return prompt, Path(filename)
+
+        # Pattern 3: output.txt prompt ...
+        parts = raw.split(maxsplit=1)
+        first_token = parts[0].strip('\"\'')
+        if any(first_token.lower().endswith(ext) for ext in (".txt", ".md", ".log", ".json", ".csv", ".html")):
+            if len(parts) > 1:
+                prompt = parts[1].strip()
+                if prompt.startswith('"') and prompt.endswith('"') and len(prompt) >= 2:
+                    prompt = prompt[1:-1]
+                return prompt, Path(first_token)
+            else:
+                return None, Path(first_token)
+
+        # Pattern 4: prompt ... output.txt
+        parts_r = raw.rsplit(maxsplit=1)
+        last_token = parts_r[-1].strip('\"\'')
+        if any(last_token.lower().endswith(ext) for ext in (".txt", ".md", ".log", ".json", ".csv")):
+            prompt = parts_r[0].strip()
+            if prompt.startswith('"') and prompt.endswith('"') and len(prompt) >= 2:
+                prompt = prompt[1:-1]
+            return prompt, Path(last_token)
+
+        # Single word without space ending with file extension
+        if raw.lower().endswith((".txt", ".md", ".log")):
+            return None, Path(raw.strip('\"\''))
+
+        # Fallback: treat entire string as prompt to be generated
+        return raw.strip('\"\''), None
+
+    def generate(self, prompt: str, export_file: Optional[Path] = None) -> None:
         """Runs streaming generation for a single user turn."""
         if self.pending_file_context:
             user_content = (
@@ -398,6 +476,15 @@ class Chat:
 
         print(f"{UI.DIM}{stats}{UI.RESET}\n")
 
+        if export_file is not None:
+            try:
+                export_target = export_file.expanduser().resolve()
+                export_target.parent.mkdir(parents=True, exist_ok=True)
+                export_target.write_text(assistant_text, encoding="utf-8")
+                print(f"{UI.GREEN}[OK] Model answer exported to:{UI.RESET} {export_target}\n")
+            except Exception as ex:
+                print(f"{UI.RED}[!] Failed to export answer to {export_file}: {ex}{UI.RESET}\n")
+
     def run(self) -> None:
         """Main chat read-eval-print loop."""
         while True:
@@ -491,6 +578,88 @@ class Chat:
                     print(f"{UI.YELLOW}Usage: /file <path/to/document.pdf or file.txt>{UI.RESET}")
                 continue
 
+            if root_cmd in ("/export", "/save", "/export-answer"):
+                raw_args = prompt[len(root_cmd):].strip()
+                prompt_text, export_path = self.parse_export_args(raw_args)
+
+                if prompt_text:
+                    # 1. User specified a prompt: generate answer and export directly
+                    cleaned_prompt, inline_file = self.extract_inline_file(prompt_text)
+                    if inline_file:
+                        if not inline_file.exists():
+                            print(f"\n{UI.RED}Attached file not found: {inline_file}{UI.RESET}\n")
+                            continue
+                        try:
+                            from .files import extract_text_from_path
+                            self.pending_file_context = extract_text_from_path(inline_file)
+                            self.pending_file_name = inline_file.name
+                            print(f"\n{UI.GREEN}Attached file: {inline_file.name} ({len(self.pending_file_context):,} chars).{UI.RESET}")
+                        except Exception as ex:
+                            print(f"\n{UI.RED}Failed to read attached file: {ex}{UI.RESET}\n")
+                            continue
+
+                    if not export_path:
+                        ts = time.strftime("%Y%m%d_%H%M%S")
+                        export_path = Path(f"answer_{ts}.txt")
+
+                    if self.pipe is None:
+                        print(f"\n{UI.YELLOW}No model is loaded. Type /load to load a model.{UI.RESET}\n")
+                        continue
+
+                    self.generate(cleaned_prompt, export_file=export_path)
+                    continue
+
+                else:
+                    # 2. No prompt specified: export the LAST generated model answer
+                    last_reply = None
+                    for m in reversed(self.history_messages):
+                        if m["role"] == "assistant":
+                            last_reply = m["content"]
+                            break
+
+                    if not last_reply:
+                        print(f"\n{UI.YELLOW}No model answer to export yet. Please chat with the model first.{UI.RESET}\n")
+                        continue
+
+                    if not export_path:
+                        ts = time.strftime("%Y%m%d_%H%M%S")
+                        export_path = Path(f"answer_{ts}.txt")
+
+                    target_file = export_path.expanduser().resolve()
+                    try:
+                        target_file.parent.mkdir(parents=True, exist_ok=True)
+                        target_file.write_text(last_reply, encoding="utf-8")
+                        print(f"\n{UI.GREEN}[OK] Last model answer exported to:{UI.RESET} {target_file}\n")
+                    except Exception as ex:
+                        print(f"\n{UI.RED}Failed to export file: {ex}{UI.RESET}\n")
+                    continue
+
+            if root_cmd in ("/export-chat", "/save-chat", "/export-all"):
+                if not self.history_messages:
+                    print(f"\n{UI.YELLOW}No chat history to export yet.{UI.RESET}\n")
+                    continue
+
+                if len(parts) > 1:
+                    raw_target = " ".join(parts[1:]).strip('\"\'')
+                    if not raw_target.lower().endswith((".txt", ".md")):
+                        raw_target += ".txt"
+                else:
+                    ts = time.strftime("%Y%m%d_%H%M%S")
+                    raw_target = f"chat_{ts}.txt"
+
+                target_file = Path(raw_target).expanduser().resolve()
+                try:
+                    target_file.parent.mkdir(parents=True, exist_ok=True)
+                    lines = []
+                    for m in self.history_messages:
+                        speaker = "You" if m["role"] == "user" else "Assistant"
+                        lines.append(f"[{speaker}]\n{m['content']}\n")
+                    target_file.write_text("\n".join(lines), encoding="utf-8")
+                    print(f"\n{UI.GREEN}[OK] Entire chat conversation exported to:{UI.RESET} {target_file}\n")
+                except Exception as ex:
+                    print(f"\n{UI.RED}Failed to export file: {ex}{UI.RESET}\n")
+                continue
+
             if root_cmd in ("/unload", "/eject"):
                 self.unload()
                 continue
@@ -519,6 +688,21 @@ class Chat:
             if self.pipe is None:
                 print(f"\n{UI.YELLOW}No model is loaded. Type /load to load a model.{UI.RESET}\n")
                 continue
+
+            # Support inline /file embedded directly in regular prompt
+            if "/file " in prompt.lower():
+                prompt, inline_file = self.extract_inline_file(prompt)
+                if inline_file:
+                    if inline_file.exists():
+                        try:
+                            from .files import extract_text_from_path
+                            self.pending_file_context = extract_text_from_path(inline_file)
+                            self.pending_file_name = inline_file.name
+                            print(f"\n{UI.GREEN}Attached file: {inline_file.name} ({len(self.pending_file_context):,} chars).{UI.RESET}")
+                        except Exception as ex:
+                            print(f"\n{UI.RED}Failed to read attached file: {ex}{UI.RESET}\n")
+                    else:
+                        print(f"\n{UI.RED}Attached file not found: {inline_file}{UI.RESET}\n")
 
             self.generate(prompt)
 
