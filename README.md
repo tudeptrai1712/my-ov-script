@@ -79,34 +79,7 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
 
 ## Project Architecture
 
-```
-my ov script/
-├── ovchat/                     # Core application package
-│   ├── __init__.py             # Package exports & startup dependency verification
-│   ├── verifier.py             # Automatic pip dependency verifier & diagnostics
-│   ├── sysmon.py               # Hardware telemetry engine (CPU, RAM, GPU Compute, XMX, VRAM)
-│   ├── config.py               # Constants, directories, and context defaults
-│   ├── files.py                # Document text parser & PDF-to-image renderer (pypdfium2)
-│   ├── metadata.py             # Model metadata inspection & VLM detection
-│   ├── devices.py              # Hardware device discovery & compatibility filtering
-│   ├── memory.py               # Live GPU/shared VRAM counter monitoring
-│   ├── history.py              # Markdown session transcript auto-saver
-│   ├── settings.py             # Persistent user settings manager (user_config.json)
-│   ├── chat.py                 # Multi-turn interactive chat engine & CLI commands
-│   ├── cli.py                  # CLI runner, menus, and launch sequence
-│   ├── ui.py                   # ANSI terminal formatting & helpers
-│   └── web/                    # FastAPI OpenAI-compatible serving backend
-│       ├── __init__.py
-│       ├── __main__.py         # Run via python -m ovchat.web
-│       └── app.py              # FastAPI server (OpenAI /v1 API: models & chat completions)
-├── manage_models.py            # Download, convert (INT4), list, and delete models
-├── requirements.txt            # Python dependencies
-├── user_config.json            # Auto-persisted user preferences
-├── kill_server.py              # Instant server terminator (Port 8000)
-├── run_server.py               # Dedicated OpenAI-compatible API server (Port 8000)
-├── ovchat.py                   # Primary entry point (CLI & server)
-└── ovchat_fallback.py          # Standalone single-file fallback script
-```
+[![Architecture diagram for tudeptrai1712/my-ov-script on a pale lavender background. Five groups show the project components: User Interfaces includes Interactive CLI, API Server, Browser Client, and Fallback Runner; Model Control includes Model Catalog, Model Metadata, Device Selection, Settings Manager, and Model Files; Inference Runtime includes Chat Engine and OpenVINO Runtime; Operations includes Hardware Telemetry, Memory Monitor, and User Settings; Context and State includes Document Processing, History Saver, and Chat History; Other parts includes Terminal User, OpenAI Client, and Open WebUI. The footer reads Architecture diagram · 20 parts · 30 connections, beside an Explore it interactively button. GitDiagram appears at the top right.](https://gitdiagram.com/tudeptrai1712/my-ov-script/diagram.png)](https://gitdiagram.com/tudeptrai1712/my-ov-script?utm_source=readme&utm_medium=picture)
 
 ---
 
