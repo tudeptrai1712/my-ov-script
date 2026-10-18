@@ -70,15 +70,32 @@ def handle_info(args_str: str, context: CommandContext) -> CommandResult:
 
 
 def handle_think(args_str: str, context: CommandContext) -> CommandResult:
-    """Toggles or explicitly configures reasoning mode (/think on, /think off)."""
+    """Toggles or explicitly configures reasoning mode (/think on, /think off, /think status)."""
+    if not context.engine.metadata.supports_reasoning:
+        print(f"\n{UI.YELLOW}Reasoning mode is not supported by model: {context.engine.metadata.name}.{UI.RESET}\n")
+        return CommandResult()
+
     arg = args_str.strip().lower()
+
+    if arg in ("status", "info", "state"):
+        curr = "enabled" if context.engine.reasoning_enabled else "disabled"
+        col = UI.GREEN if context.engine.reasoning_enabled else UI.YELLOW
+        print(f"\n{col}Reasoning mode is currently {curr}.{UI.RESET}\n")
+        return CommandResult()
+
     if arg in ("on", "1", "true", "enable", "yes"):
-        enabled = context.engine.set_reasoning(True)
+        new_state = True
     elif arg in ("off", "0", "false", "disable", "no"):
-        enabled = context.engine.set_reasoning(False)
+        new_state = False
+    elif not arg:
+        new_state = not context.engine.reasoning_enabled
     else:
-        # Toggle current state
-        enabled = context.engine.set_reasoning(not context.engine.reasoning_enabled)
+        print(f"\n{UI.YELLOW}Usage: /think [on|off|status]{UI.RESET}\n")
+        return CommandResult()
+
+    enabled = context.engine.set_reasoning(new_state)
+    if context.history_saver:
+        context.history_saver.reasoning_enabled = enabled
 
     state_str = "enabled" if enabled else "disabled"
     color = UI.GREEN if enabled else UI.YELLOW

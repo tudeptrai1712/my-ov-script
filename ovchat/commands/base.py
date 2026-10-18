@@ -12,7 +12,7 @@ class CommandContext:
 
     engine: InferenceEngine
     history_saver: ChatHistorySaver
-    chat_session: Any  # Reference to Chat session for callbacks like load_model
+    chat_session: Any = None  # Reference to Chat session for callbacks like load_model
     pending_file_context: Optional[str] = None
     pending_file_name: Optional[str] = None
     pending_image_info: Optional[str] = None
