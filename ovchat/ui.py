@@ -1,5 +1,14 @@
 import os
+import re
+import sys
 from typing import Optional, Union
+
+# Ensure UTF-8 console output on Windows if available
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 
 class UI:
@@ -16,6 +25,29 @@ class UI:
     MAGENTA = "\033[95m"
     CYAN = "\033[96m"
     WHITE = "\033[97m"
+
+
+def strip_ansi(s: str) -> str:
+    """Removes ANSI color escape sequences from a string."""
+    return re.sub(r"\033\[[0-9;]*m", "", s)
+
+
+def visible_len(s: str) -> int:
+    """Returns visible character length of string, excluding ANSI escapes."""
+    return len(strip_ansi(s))
+
+
+def pad_ansi(text: str, width: int, align: str = "left") -> str:
+    """Pads a string containing ANSI escape codes to a fixed visible display width."""
+    vis = visible_len(text)
+    pad = max(0, width - vis)
+    if align == "right":
+        return (" " * pad) + text
+    elif align == "center":
+        left = pad // 2
+        right = pad - left
+        return (" " * left) + text + (" " * right)
+    return text + (" " * pad)
 
 
 def clear_screen() -> None:
@@ -58,4 +90,3 @@ def progress_bar(fraction: float, width: int = 40) -> str:
     filled = int(clamped_fraction * width)
     empty = width - filled
     return f"[{'█' * filled}{'░' * empty}]"
-

@@ -7,7 +7,7 @@ verify_dependencies(auto_install=True, show_banner=True)
 from .chat import Chat
 from .cli import main
 from .config import CHAT_HISTORY_DIR, MODEL_ROOT
-from .devices import get_devices
+from .devices import HardwareSpecs, get_devices, get_hardware_specs, render_hardware_and_models
 from .history import ChatHistorySaver
 from .metadata import ModelMetadata, read_model_metadata
 from .models import find_models
@@ -19,6 +19,9 @@ __all__ = [
     "main",
     "find_models",
     "get_devices",
+    "get_hardware_specs",
+    "render_hardware_and_models",
+    "HardwareSpecs",
     "ModelMetadata",
     "read_model_metadata",
     "ChatHistorySaver",

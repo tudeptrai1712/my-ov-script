@@ -352,6 +352,19 @@ class Chat:
                 f"{human_bytes(self.actual_memory_increase)}"
             )
 
+        try:
+            from .devices import get_hardware_specs
+            specs = get_hardware_specs()
+            print(f"\n{UI.BOLD}System Hardware:{UI.RESET}")
+            print(f"  CPU: {specs.cpu_name} ({specs.cpu_cores_physical}C/{specs.cpu_cores_logical}T)")
+            print(f"  RAM: {human_bytes(specs.ram_total_bytes)} total | {human_bytes(specs.ram_available_bytes)} available")
+            if specs.gpus:
+                g = specs.gpus[0]
+                eu_s = f", {g.execution_units} EUs" if g.execution_units else ""
+                print(f"  GPU: {g.name} ({human_bytes(g.total_memory)}{eu_s})")
+        except Exception:
+            pass
+
         print()
 
     @staticmethod
@@ -846,16 +859,15 @@ class Chat:
 
             if root_cmd == "/load":
                 from .models import find_models
-                from .devices import choose_device
+                from .devices import choose_device, render_hardware_and_models
                 from .config import MODEL_ROOT
                 all_models = find_models(MODEL_ROOT)
                 if not all_models:
                     print(f"{UI.RED}No models found in {MODEL_ROOT}{UI.RESET}")
                     continue
-                print("\nAvailable Models:")
-                for idx, m in enumerate(all_models, 1):
-                    print(f"  {idx}. {m.name}")
-                sel = input("\nSelect model number: ").strip()
+                print()
+                render_hardware_and_models(all_models, MODEL_ROOT)
+                sel = input(f"{UI.CYAN}Select model number: {UI.RESET}").strip()
                 if sel.isdigit() and 1 <= int(sel) <= len(all_models):
                     target_model = all_models[int(sel) - 1]
                     from .metadata import read_model_metadata

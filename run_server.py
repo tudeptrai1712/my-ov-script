@@ -128,6 +128,13 @@ def prompt_change_parameters():
     top_p = settings.get("top_p", 0.95)
     reasoning = settings.get("enable_reasoning", False)
 
+    try:
+        from ovchat.devices import print_hardware_specs
+        print()
+        print_hardware_specs()
+    except Exception:
+        pass
+
     print("\n" + "=" * 68)
     print("  Active Server Model Load Parameters:")
     print(f"  [1] Target Device       : {dev}")

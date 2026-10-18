@@ -113,9 +113,9 @@ python ovchat.py
 
 The interactive CLI will:
 1. Auto-verify dependencies.
-2. Let you select any model from `D:\AI models\openvino-genai`.
-3. Filter compatible hardware (Intel Arc GPU, CPU).
-4. Run with maximum raw tokens/second throughput.
+2. Inspect and display system hardware specifications (CPU cores, RAM total/available, Intel Arc GPU memory & EUs, NPU status).
+3. Display available models alongside their hardware fit (whether the model fits into GPU memory and remaining KV headroom).
+4. Prioritize Intel Arc GPU acceleration and run with maximum raw tokens/second throughput.
 
 ---
 

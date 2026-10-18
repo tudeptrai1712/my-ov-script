@@ -41,7 +41,10 @@ def model_size(model_path: Path) -> int:
 
 
 def choose_model(model_root: Optional[Path] = None) -> Optional[Path]:
-    """Interactively prompts the user to select an OpenVINO model."""
+    """
+    Interactively prompts the user to select an OpenVINO model.
+    Displays detailed system hardware specs alongside the model list and their hardware fit.
+    """
     root = model_root or MODEL_ROOT
     models = find_models(root)
 
@@ -53,14 +56,11 @@ def choose_model(model_root: Optional[Path] = None) -> Optional[Path]:
         input("\nPress Enter...")
         return None
 
-    print()
-    print(f"{UI.BOLD}{UI.CYAN}OpenVINO Models{UI.RESET}\n")
-
-    for i, model in enumerate(models, start=1):
-        size = model_size(model)
-        print(f"  {i}. {model.name} {UI.DIM}({human_bytes(size)}){UI.RESET}")
+    # Render hardware specifications alongside the available models
+    from .devices import render_hardware_and_models
 
     print()
+    render_hardware_and_models(models, root)
 
     while True:
         value = input(f"{UI.CYAN}Select model [1]: {UI.RESET}").strip()
@@ -76,4 +76,3 @@ def choose_model(model_root: Optional[Path] = None) -> Optional[Path]:
             pass
 
         print(f"{UI.YELLOW}Invalid selection.{UI.RESET}")
-
