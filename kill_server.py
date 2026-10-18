@@ -2,38 +2,24 @@
 Quick utility to terminate running OpenVINO API Server (Port 8000).
 
 Usage:
-    python kill_server.py
-    python kill_server.py --port 8000
-    py kill_server.py
+    python kill_server.py [--port 8000]
 """
 
-import argparse
 import sys
-from run_server import kill_server_on_port
+from ovchat.cli import kill_server_on_port, stop_command
+
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Kill running OpenVINO GenAI servers")
-    parser.add_argument("--port", type=int, default=None, help="Specific port to terminate (default: 8000)")
-    parser.add_argument("--kill", "--stop", action="store_true", help="Kill active servers")
-    parser.add_argument("--kill-server", "--stop-server", "--kill-web", action="store_true", help="Kill active servers")
-    args, _ = parser.parse_known_args(argv)
+    if argv is None:
+        argv = sys.argv[1:]
 
-    ports_to_check = [args.port] if args.port else [8000]
-    total_killed = 0
+    port = 8000
+    for i, a in enumerate(argv):
+        if a in ("--port", "-p") and i + 1 < len(argv) and argv[i + 1].isdigit():
+            port = int(argv[i + 1])
 
-    print("\n" + "=" * 62)
-    print("  OpenVINO GenAI Server Killer")
-    print("=" * 62)
+    stop_command(port=port)
 
-    for p in ports_to_check:
-        print(f"\nChecking port {p}...")
-        if kill_server_on_port(p):
-            total_killed += 1
-
-    if total_killed == 0:
-        print("\n[Result] No active servers found running on checked ports.\n")
-    else:
-        print(f"\n[Result] Done. Stopped {total_killed} server(s).\n")
 
 if __name__ == "__main__":
     main()

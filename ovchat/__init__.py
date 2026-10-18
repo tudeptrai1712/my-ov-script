@@ -6,8 +6,10 @@ verify_dependencies(auto_install=True, show_banner=True)
 
 from .chat import Chat
 from .cli import main
+from .commands import CommandRouter
 from .config import CHAT_HISTORY_DIR, MODEL_ROOT
 from .devices import HardwareSpecs, get_devices, get_hardware_specs, render_hardware_and_models
+from .engine import GenerationResult, InferenceEngine
 from .history import ChatHistorySaver
 from .metadata import ModelMetadata, read_model_metadata
 from .models import find_models
@@ -17,6 +19,9 @@ __version__ = "0.1.0"
 __all__ = [
     "Chat",
     "main",
+    "InferenceEngine",
+    "GenerationResult",
+    "CommandRouter",
     "find_models",
     "get_devices",
     "get_hardware_specs",

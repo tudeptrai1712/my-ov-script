@@ -72,14 +72,52 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
   - Automatically checks all required pip packages (`openvino-genai`, `pypdfium2`, `pypdf`, `Pillow`, `fastapi`, `uvicorn`, etc.) on every launch.
   - If any dependency is missing, it auto-installs it via pip before the application initializes.
 
-- **Standalone Single-File Fallback Script**:
-  - [`ovchat_fallback.py`](ovchat_fallback.py) is a completely self-contained single file with zero local module dependencies, containing full LLM/VLM, document/image/PDF-to-image upload, `/export` command, reasoning, memory tracking, and chat logging.
+- **Standalone Distribution & Automated Bundler**:
+  - [`ovchat_fallback.py`](ovchat_fallback.py) provides a lightweight launcher with fallback resolution.
+  - Built-in automated bundler ([`scripts/build_standalone.py`](scripts/build_standalone.py)) creates an executable zip archive ([`dist/ovchat.pyz`](dist/ovchat.pyz)) with zero build dependencies using Python's standard `zipapp`.
 
 ---
 
-## Project Architecture
+## Project Architecture & Directory Layout
 
 [![Architecture diagram for tudeptrai1712/my-ov-script on a pale lavender background. Five groups show the project components: User Interfaces includes Interactive CLI, API Server, Browser Client, and Fallback Runner; Model Control includes Model Catalog, Model Metadata, Device Selection, Settings Manager, and Model Files; Inference Runtime includes Chat Engine and OpenVINO Runtime; Operations includes Hardware Telemetry, Memory Monitor, and User Settings; Context and State includes Document Processing, History Saver, and Chat History; Other parts includes Terminal User, OpenAI Client, and Open WebUI. The footer reads Architecture diagram · 20 parts · 30 connections, beside an Explore it interactively button. GitDiagram appears at the top right.](https://gitdiagram.com/tudeptrai1712/my-ov-script/diagram.png)](https://gitdiagram.com/tudeptrai1712/my-ov-script?utm_source=readme&utm_medium=picture)
+
+```
+my-ov-script/
+├── pyproject.toml              # Standard packaging (entrypoint: ovchat)
+├── requirements.txt            # Locked dependencies
+├── ovchat.py                   # Root unified CLI launcher
+├── run_server.py               # Convenience shortcut for API server
+├── kill_server.py              # Convenience shortcut to terminate server
+├── ovchat_fallback.py          # Standalone launcher
+├── scripts/
+│   └── build_standalone.py     # Zipapp packager -> dist/ovchat.pyz
+├── ovchat/
+│   ├── __init__.py             # Package exports & dependency guard
+│   ├── cli.py                  # Unified subcommands (chat, serve, stop, check, models)
+│   ├── engine.py               # Pure OpenVINO GenAI LLM & VLM runtime wrapper
+│   ├── parser.py               # Path sanitization, quotes & inline tag extraction
+│   ├── files.py                # Document text parser & PDF-to-image rasterizer
+│   ├── metadata.py             # Model topology & metadata inspection
+│   ├── history.py              # Chat logging & markdown transcript persistence
+│   ├── settings.py             # Persistent user_config.json management
+│   ├── ui.py                   # ANSI styling, layout formatting & progress bars
+│   ├── models.py               # Model scanner & disk catalog
+│   ├── hardware/               # Hardware specs & live telemetry
+│   │   ├── __init__.py
+│   │   ├── specs.py            # Static discovery (CPU, RAM, Intel Arc GPU EUs, NPU)
+│   │   └── monitor.py          # Background polling (VRAM/RAM usage)
+│   ├── commands/               # Modular slash command system
+│   │   ├── __init__.py
+│   │   ├── base.py             # CommandContext, CommandHandler, CommandResult
+│   │   ├── router.py           # Command dispatcher
+│   │   ├── attachments.py      # /file, /image, /pdf-image handlers
+│   │   ├── export.py           # /export, /save, /export-chat handlers
+│   │   └── session.py          # /clear, /info, /think, /unload, /load, /quit
+│   └── web/                    # FastAPI OpenAI /v1 API server
+│       ├── __init__.py
+│       └── app.py
+```
 
 ---
 
@@ -91,13 +129,18 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
   - Intel CPU (x86_64 with AVX2/AVX512/AMX)
 - **Operating System**: Windows 10/11 or Linux
 
-### Dependencies
+### Installation
 
-Dependencies are checked and installed **automatically on every launch**. Alternatively, install them manually:
+Install dependencies or install the package in editable mode:
 
 ```bash
+# Option A: Install dependencies directly
 pip install -r requirements.txt
+
+# Option B: Install package globally in your environment (recommended)
+pip install -e .
 ```
+
 
 ---
 
@@ -108,6 +151,10 @@ pip install -r requirements.txt
 For maximum inference speed without any HTTP/browser serialization overhead:
 
 ```bash
+# Using installed console command:
+ovchat chat
+
+# Or using Python runner directly:
 python ovchat.py
 ```
 
@@ -158,15 +205,17 @@ PDFs are automatically rendered into crisp image tensors via Chromium's PDFium e
 Start the high-performance local server:
 
 ```bash
+# Using the unified CLI:
+ovchat serve --port 8000
+
+# Or using the dedicated runner:
 python run_server.py --port 8000
-# or using the main runner:
-python ovchat.py --server
 
 # Optional flags:
-python run_server.py --device GPU        # Force Intel Arc GPU inference (default)
-python run_server.py --device CPU        # Force CPU inference
-python run_server.py -y                  # Skip parameter confirmation prompt
-python run_server.py --kill              # Stop running server
+ovchat serve --device GPU        # Force Intel Arc GPU inference (default)
+ovchat serve --device CPU        # Force CPU inference
+ovchat serve -y                  # Skip parameter confirmation prompt
+ovchat stop                      # Stop running server (or python kill_server.py)
 ```
 
 - **Load Parameter Confirmation**: When launched interactively, the server displays current parameters (Device, Context Length, Max Tokens, Temperature, Top-P, Reasoning) and lets you change them before startup.
@@ -174,7 +223,7 @@ python run_server.py --kill              # Stop running server
 - **OpenAI API Base URL**: `http://127.0.0.1:8000/v1`
 - **Models List Endpoint**: `http://127.0.0.1:8000/v1/models` (exposes both default, `(GPU)`, and `(CPU)` model entries for selection in Open WebUI)
 - **Chat Completions**: `http://127.0.0.1:8000/v1/chat/completions`
-- **To stop the server**: Press `q` or `k` in console, type `quit`, or run `python kill_server.py`.
+- **To stop the server**: Press `q` or `k` in console, type `quit`, run `ovchat stop`, or run `python kill_server.py`.
 
 ---
 
@@ -205,54 +254,47 @@ docker run -d -p 3000:8080 -e OPENAI_API_BASE_URL=http://host.docker.internal:80
 
 ---
 
-### 5. Managing Models (Download, Convert & Delete)
+### 5. Inspecting Models & Hardware Fit
 
-Use the dedicated model manager to inspect disk usage, download pre-converted OpenVINO models, convert raw Hugging Face models, or safely delete models:
+Inspect local models, their disk footprints, precision, and GPU memory fit:
 
-#### Interactive Menu
 ```bash
-python manage_models.py
-# or using the main runner:
-python ovchat.py --manage
+# Using unified CLI:
+ovchat models
+
+# Or using Python runner:
+python ovchat.py models
 ```
 
-#### Command-Line Operations:
-```bash
-# List local models with sizes, precision, and supported devices
-python manage_models.py list
-
-# Download a pre-converted OpenVINO INT4 model from Hugging Face:
-python manage_models.py download OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int4-ov
-
-# Convert and export a raw Hugging Face model or local directory to OpenVINO INT4:
-python manage_models.py convert Qwen/Qwen2.5-0.5B-Instruct
-
-# Delete a model to free disk space:
-python manage_models.py delete Gemma-4-E4B
-```
-
-> [!TIP]
-> **Pre-Converted Models vs. Local Conversion**:
-> Whenever possible, download official pre-converted models from the `OpenVINO/` namespace on Hugging Face (e.g. `OpenVINO/Llama-3.2-3B-Instruct-int4-ov`, `OpenVINO/Qwen2.5-Coder-0.5B-Instruct-int4-ov`). Models that are already in OpenVINO INT4 format are downloaded directly without unnecessary re-conversion. When converting raw models, the manager always converts them into optimized **INT4** format for Intel GPU acceleration.
 
 ---
 
-### 6. Standalone Fallback Script
+### 6. Standalone Executable & Zipapp Distribution
 
-If you ever need a 100% self-contained single script requiring no package folders:
+If you want a portable single-file bundle or lightweight fallback launcher:
 
 ```bash
+# Option A: Run the standalone zipapp executable archive (dist/ovchat.pyz)
+python dist/ovchat.pyz check
+python dist/ovchat.pyz chat
+
+# Option B: Build or refresh the standalone zipapp bundle
+python scripts/build_standalone.py
+
+# Option C: Use the single-file fallback runner
 python ovchat_fallback.py
 ```
 
 ---
 
-### 7. Checking Dependency Health
+### 7. Checking Dependency & Hardware Diagnostic Health
 
-Inspect all packages and their exact installed versions:
+Inspect all packages, versions, and full hardware acceleration status (CPU, RAM, Intel Arc GPU, NPU):
 
 ```bash
-python ovchat.py --deps
+ovchat check
+# or using the main runner:
+python ovchat.py check
 ```
 
 ---
