@@ -1,7 +1,8 @@
 """
 OpenVINO GenAI - OpenAI-Compatible API Server.
 High-performance backend for Open WebUI and standard OpenAI clients.
-Supports streaming chat completions, multimodal vision inputs, and dynamic GPU/CPU model loading.
+Supports streaming chat completions, multimodal vision inputs, dynamic GPU/CPU/HETERO model loading,
+Heterogeneous Pipeline Parallelism, and Mixture of Experts (MoE) offloading to disk.
 """
 
 import asyncio
@@ -27,11 +28,14 @@ from pydantic import BaseModel
 
 from ..config import (
     DEFAULT_CONTEXT,
+    DEFAULT_ENABLE_MOE_OFFLOAD,
     DEFAULT_ENABLE_REASONING,
     DEFAULT_MAX_NEW_TOKENS,
+    DEFAULT_MODEL_DISTRIBUTION_POLICY,
+    DEFAULT_MOE_OFFLOAD_RATIO,
     MODEL_ROOT,
 )
-from ..memory import powershell_gpu_memory
+from ..hardware.monitor import powershell_gpu_memory
 from ..metadata import check_device_compatibility, read_model_metadata
 from ..models import find_models, model_size
 from ..settings import load_settings, save_settings
@@ -59,6 +63,10 @@ class ModelSession:
         self.temperature: float = 0.7
         self.top_p: float = 0.95
         self.load_time: float = 0.0
+        self.enable_moe_offload: bool = DEFAULT_ENABLE_MOE_OFFLOAD
+        self.moe_offload_ratio: int = DEFAULT_MOE_OFFLOAD_RATIO
+        self.model_distribution_policy: str = DEFAULT_MODEL_DISTRIBUTION_POLICY
+        self.applied_properties: Dict[str, Any] = {}
         self.lock = threading.Lock()
 
     def is_loaded(self) -> bool:
@@ -72,6 +80,7 @@ class ModelSession:
             self.metadata = None
             self.model_name = ""
             self.model_path = None
+            self.applied_properties = {}
             gc.collect()
 
 
@@ -86,6 +95,9 @@ class LoadModelRequest(BaseModel):
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 0.95
     enable_reasoning: Optional[bool] = False
+    enable_moe_offload: Optional[bool] = None
+    moe_offload_ratio: Optional[int] = None
+    model_distribution_policy: Optional[str] = None
 
 
 async def load_model_internal(req: LoadModelRequest) -> Dict[str, Any]:
@@ -122,11 +134,49 @@ async def load_model_internal(req: LoadModelRequest) -> Dict[str, Any]:
             session.temperature = req.temperature if req.temperature is not None else 0.7
             session.top_p = req.top_p if req.top_p is not None else 0.95
 
-            t0 = time.perf_counter()
-            if meta.is_vlm:
-                session.pipe = ov_genai.VLMPipeline(str(model_path), req.device)
+            if req.enable_moe_offload is not None:
+                session.enable_moe_offload = req.enable_moe_offload
             else:
-                session.pipe = ov_genai.LLMPipeline(str(model_path), req.device)
+                session.enable_moe_offload = settings.get("enable_moe_offload", DEFAULT_ENABLE_MOE_OFFLOAD)
+
+            if req.moe_offload_ratio is not None:
+                session.moe_offload_ratio = req.moe_offload_ratio
+            else:
+                session.moe_offload_ratio = settings.get("moe_offload_ratio", DEFAULT_MOE_OFFLOAD_RATIO)
+
+            if req.model_distribution_policy:
+                session.model_distribution_policy = req.model_distribution_policy
+            else:
+                session.model_distribution_policy = settings.get("model_distribution_policy", DEFAULT_MODEL_DISTRIBUTION_POLICY)
+
+            # Build OpenVINO properties map
+            properties: Dict[str, Any] = {}
+
+            # Heterogeneous Pipeline Parallelism
+            if req.device.upper().startswith("HETERO"):
+                properties["MODEL_DISTRIBUTION_POLICY"] = session.model_distribution_policy
+
+            # MoE Offload to disk (GPU / HETERO)
+            if meta.is_moe and session.enable_moe_offload:
+                if "GPU" in req.device.upper():
+                    properties["OFFLOAD_RATIO"] = int(session.moe_offload_ratio)
+                    properties["ENABLE_MMAP"] = "YES"
+
+            session.applied_properties = dict(properties)
+
+            t0 = time.perf_counter()
+            pipeline_cls = ov_genai.VLMPipeline if meta.is_vlm else ov_genai.LLMPipeline
+            try:
+                if properties:
+                    session.pipe = pipeline_cls(str(model_path), req.device, **properties)
+                else:
+                    session.pipe = pipeline_cls(str(model_path), req.device)
+            except TypeError:
+                try:
+                    session.pipe = pipeline_cls(str(model_path), req.device, properties)
+                except Exception:
+                    session.pipe = pipeline_cls(str(model_path), req.device)
+
             session.load_time = time.perf_counter() - t0
 
             session.tokenizer = session.pipe.get_tokenizer()
@@ -148,6 +198,8 @@ async def load_model_internal(req: LoadModelRequest) -> Dict[str, Any]:
         "model_name": session.model_name,
         "device": session.device,
         "display_type": meta.display_type,
+        "is_moe": meta.is_moe,
+        "moe_summary": meta.moe_summary,
         "load_time_seconds": round(session.load_time, 2),
     }
 
@@ -157,7 +209,7 @@ async def load_model_internal(req: LoadModelRequest) -> Dict[str, Any]:
 # ============================================================
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="OpenVINO GenAI - OpenAI-Compatible API Server", version="0.1.0")
+    app = FastAPI(title="OpenVINO GenAI - OpenAI-Compatible API Server", version="0.2.0")
 
     app.add_middleware(
         CORSMiddleware,
@@ -172,9 +224,11 @@ def create_app() -> FastAPI:
         return {
             "status": "online",
             "service": "OpenVINO GenAI - OpenAI-Compatible API Server",
-            "version": "0.1.0",
+            "version": "0.2.0",
             "active_model": session.model_name or None,
             "active_device": session.device if session.is_loaded() else None,
+            "hetero_support": "Pipeline Parallelism Preview (HETERO:GPU,CPU)",
+            "moe_offloading": "Mixture of Experts disk offloading (OFFLOAD_RATIO)",
             "endpoints": {
                 "models": "/v1/models",
                 "chat_completions": "/v1/chat/completions",
@@ -192,6 +246,10 @@ def create_app() -> FastAPI:
             "device": session.device,
             "display_type": session.metadata.display_type if session.metadata else "",
             "precision": session.metadata.precision.upper() if session.metadata else "",
+            "is_moe": session.metadata.is_moe if session.metadata else False,
+            "moe_summary": session.metadata.moe_summary if session.metadata else "",
+            "moe_offload_ratio": session.moe_offload_ratio if (session.is_loaded() and session.metadata and session.metadata.is_moe) else None,
+            "model_distribution_policy": session.model_distribution_policy if (session.is_loaded() and session.device.upper().startswith("HETERO")) else None,
             "gpu_memory_human": human_bytes(current_mem),
         }
 
@@ -234,7 +292,17 @@ def create_app() -> FastAPI:
                 "root": m.name,
                 "parent": None,
             })
-            # 3. Explicit CPU target entry
+            # 3. Explicit HETERO target entry (Pipeline Parallelism Preview)
+            model_objects.append({
+                "id": f"{m.name} (HETERO)",
+                "object": "model",
+                "created": now_ts,
+                "owned_by": "openvino",
+                "permission": [],
+                "root": m.name,
+                "parent": None,
+            })
+            # 4. Explicit CPU target entry
             model_objects.append({
                 "id": f"{m.name} (CPU)",
                 "object": "model",
@@ -253,7 +321,18 @@ def create_app() -> FastAPI:
         models = [m.name for m in find_models(root)]
 
         clean_name = model_id
-        for suffix in (" (GPU)", " (CPU)", ":GPU", ":CPU", "/gpu", "/cpu"):
+        for suffix in (
+            " (HETERO:GPU,CPU)",
+            " (HETERO)",
+            ":HETERO",
+            "/hetero",
+            " (GPU)",
+            " (CPU)",
+            ":GPU",
+            ":CPU",
+            "/gpu",
+            "/cpu",
+        ):
             if clean_name.endswith(suffix):
                 clean_name = clean_name[:-len(suffix)].strip()
                 break
@@ -288,6 +367,10 @@ def create_app() -> FastAPI:
         clean_model_name = req_model or ""
 
         for suffix, dev_val in [
+            (" (HETERO:GPU,CPU)", "HETERO:GPU,CPU"),
+            (" (HETERO)", "HETERO:GPU,CPU"),
+            (":HETERO", "HETERO:GPU,CPU"),
+            ("/hetero", "HETERO:GPU,CPU"),
             (" (GPU)", "GPU"),
             (" (CPU)", "CPU"),
             (":GPU", "GPU"),
@@ -516,4 +599,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-

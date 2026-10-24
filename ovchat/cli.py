@@ -11,8 +11,12 @@ from typing import List, Optional
 from .chat import Chat
 from .config import (
     DEFAULT_CONTEXT,
+    DEFAULT_ENABLE_MOE_OFFLOAD,
     DEFAULT_ENABLE_REASONING,
+    DEFAULT_HETERO_DEVICE,
     DEFAULT_MAX_NEW_TOKENS,
+    DEFAULT_MODEL_DISTRIBUTION_POLICY,
+    DEFAULT_MOE_OFFLOAD_RATIO,
     MODEL_ROOT,
 )
 from .hardware import choose_device, print_hardware_specs, render_hardware_and_models
@@ -132,10 +136,9 @@ def find_pids_on_port(port: int) -> List[int]:
 
 
 def kill_server_on_port(port: int = 8000) -> bool:
-    """Finds and terminates any running process on the specified API port."""
+    """Finds and terminates any process listening on the specified port."""
     pids = find_pids_on_port(port)
     if not pids:
-        print(f"\n[API Server] No active server found running on port {port}.\n")
         return False
 
     killed_any = False
@@ -145,38 +148,21 @@ def kill_server_on_port(port: int = 8000) -> bool:
         try:
             print(f"[API Server] Killing process PID {pid} listening on port {port}...")
             if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)],
+                    capture_output=True,
+                )
             else:
                 os.kill(pid, signal.SIGTERM)
             killed_any = True
         except Exception as e:
-            print(f"[API Server] Failed to kill PID {pid}: {e}")
+            print(f"[API Server] Warning: Could not terminate PID {pid}: {e}")
 
-    if killed_any:
-        print(f"[API Server] Successfully stopped server on port {port}.\n")
     return killed_any
 
 
-def console_listener(server):
-    """Listens for keyboard input (q, kill, exit, Ctrl+C) to cleanly stop the server."""
-    if os.name == "nt":
-        try:
-            import msvcrt
-
-            while not server.should_exit:
-                if msvcrt.kbhit():
-                    ch = msvcrt.getch()
-                    if ch in (b"q", b"Q", b"k", b"K", b"x", b"X", b"\x03"):
-                        print(
-                            f"\n[API Server] Stop key '{ch.decode('latin-1', errors='ignore')}' pressed. Shutting down server...\n"
-                        )
-                        server.should_exit = True
-                        break
-                time.sleep(0.1)
-            return
-        except Exception:
-            pass
-
+def console_listener(server) -> None:
+    """Listens for console input commands like 'q' or 'kill' to stop the server."""
     while not server.should_exit:
         try:
             line = sys.stdin.readline()
@@ -191,7 +177,11 @@ def console_listener(server):
             break
 
 
-def prompt_change_parameters():
+# ============================================================
+# INTERACTIVE PARAMETER CONFIGURATION
+# ============================================================
+
+def prompt_change_parameters() -> None:
     """Interactively prompts user to inspect or modify model load parameters before server launch."""
     from .settings import load_settings, save_settings
 
@@ -203,6 +193,9 @@ def prompt_change_parameters():
     temp = settings.get("temperature", 0.7)
     top_p = settings.get("top_p", 0.95)
     reasoning = settings.get("enable_reasoning", False)
+    moe_offload = settings.get("enable_moe_offload", True)
+    moe_ratio = settings.get("moe_offload_ratio", 50)
+    policy = settings.get("model_distribution_policy", "PIPELINE_PARALLEL")
 
     try:
         print()
@@ -210,15 +203,18 @@ def prompt_change_parameters():
     except Exception:
         pass
 
-    print("\n" + "=" * 68)
+    print("\n" + "=" * 70)
     print("  Active Server Model Load Parameters:")
     print(f"  [1] Target Device       : {dev}")
+    if dev.upper().startswith("HETERO"):
+        print(f"      Distribution Policy : {policy} (Pipeline Parallelism Preview)")
     print(f"  [2] Context Length      : {ctx}")
     print(f"  [3] Max Output Tokens   : {max_tok}")
     print(f"  [4] Temperature         : {temp}")
     print(f"  [5] Top-P               : {top_p}")
     print(f"  [6] Reasoning / Thinking: {'Enabled' if reasoning else 'Disabled'}")
-    print("=" * 68)
+    print(f"  [7] MoE Disk Offload    : {'Enabled (' + str(moe_ratio) + '% to disk)' if moe_offload else 'Disabled'}")
+    print("=" * 70)
 
     try:
         choice = input("\nDo you want to change any load parameters before launching? (y/N): ").strip().lower()
@@ -227,17 +223,23 @@ def prompt_change_parameters():
 
     if choice == "y":
         print("\n--- Change Parameters (Press Enter on any setting to keep current value) ---")
-        print(f"1. Target Device [1=GPU, 2=CPU, 3=AUTO] (Current: {dev}): ", end="", flush=True)
+        print(
+            f"1. Target Device [1=GPU, 2=HETERO:GPU,CPU (Pipeline Parallelism), 3=CPU, 4=AUTO] (Current: {dev}): ",
+            end="",
+            flush=True,
+        )
         try:
             dev_in = input().strip()
             if dev_in == "1":
                 settings["selected_device"] = "GPU"
             elif dev_in == "2":
-                settings["selected_device"] = "CPU"
+                settings["selected_device"] = "HETERO:GPU,CPU"
             elif dev_in == "3":
+                settings["selected_device"] = "CPU"
+            elif dev_in == "4":
                 settings["selected_device"] = "AUTO"
-            elif dev_in.upper() in ("GPU", "CPU", "AUTO"):
-                settings["selected_device"] = dev_in.upper()
+            elif dev_in:
+                settings["selected_device"] = dev_in
 
             ctx_in = input(f"2. Context Length (Current: {ctx}): ").strip()
             if ctx_in.isdigit() and int(ctx_in) > 0:
@@ -267,6 +269,16 @@ def prompt_change_parameters():
             elif reas_in == "n":
                 settings["enable_reasoning"] = False
 
+            moe_in = input(f"7. Enable MoE Offload to Disk [y/n] (Current: {'y' if moe_offload else 'n'}): ").strip().lower()
+            if moe_in == "y":
+                settings["enable_moe_offload"] = True
+            elif moe_in == "n":
+                settings["enable_moe_offload"] = False
+
+            moe_ratio_in = input(f"8. MoE Offload Ratio % (1-99) (Current: {moe_ratio}): ").strip()
+            if moe_ratio_in.isdigit() and 1 <= int(moe_ratio_in) <= 99:
+                settings["moe_offload_ratio"] = int(moe_ratio_in)
+
             save_settings(settings)
             print("\n[OK] Configuration updated and saved to user_config.json!\n")
         except (EOFError, KeyboardInterrupt):
@@ -289,9 +301,10 @@ def chat_command() -> None:
         return
 
     metadata = read_model_metadata(model_path)
+    moe_note = f" | {metadata.moe_summary}" if metadata.is_moe else ""
     print(
         f"{UI.DIM}Model type: {metadata.display_type} "
-        f"| Precision: {metadata.precision.upper()}{UI.RESET}\n"
+        f"| Precision: {metadata.precision.upper()}{moe_note}{UI.RESET}\n"
     )
 
     # 2. Context length
@@ -320,13 +333,30 @@ def chat_command() -> None:
     )
     print()
 
-    # 4. Hardware device selection (prioritizes GPU)
+    # 4. Hardware device selection (GPU, HETERO:GPU,CPU, CPU)
     device = choose_device(metadata)
     if device is None:
         return
     print()
 
-    # 5. Reasoning mode
+    # 5. MoE Offload settings for MoE models
+    enable_moe_offload = DEFAULT_ENABLE_MOE_OFFLOAD
+    moe_offload_ratio = DEFAULT_MOE_OFFLOAD_RATIO
+    if metadata.is_moe and "GPU" in device.upper():
+        enable_moe_offload = choose_boolean(
+            f"Enable MoE Offload to disk? ({metadata.moe_summary})",
+            default=DEFAULT_ENABLE_MOE_OFFLOAD,
+        )
+        if enable_moe_offload:
+            moe_offload_ratio = choose_integer(
+                "MoE offload ratio percentage (1-99%)",
+                default=DEFAULT_MOE_OFFLOAD_RATIO,
+                minimum=1,
+                maximum=99,
+            )
+        print()
+
+    # 6. Reasoning mode
     if metadata.supports_reasoning:
         enable_reasoning = choose_boolean(
             "Enable reasoning / thinking mode?",
@@ -336,20 +366,25 @@ def chat_command() -> None:
     else:
         enable_reasoning = False
 
-    # 6. Configuration summary
+    # 7. Configuration summary
     print(f"{UI.BOLD}Configuration{UI.RESET}")
     print(f"  Model    : {model_path.name}")
     print(f"  Type     : {metadata.display_type} ({metadata.precision.upper()})")
     print(f"  Context  : {context_length:,}")
     print(f"  Output   : {max_new_tokens:,}")
     print(f"  Device   : {device}")
+    if device.upper().startswith("HETERO"):
+        print(f"  Policy   : Pipeline Parallelism Preview ({DEFAULT_MODEL_DISTRIBUTION_POLICY})")
+    if metadata.is_moe:
+        moe_off_s = f"Enabled ({moe_offload_ratio}% to disk)" if enable_moe_offload else "Disabled"
+        print(f"  MoE      : {moe_off_s}")
 
     reason_label = "Enabled" if enable_reasoning else ("Disabled" if metadata.supports_reasoning else "Not supported by model")
     print(f"  Reasoning: {reason_label}\n")
 
     input("Press Enter to load...")
 
-    # 7. Initialize pipeline & chat session
+    # 8. Initialize pipeline & chat session
     try:
         chat = Chat(
             model_path=model_path,
@@ -358,6 +393,8 @@ def chat_command() -> None:
             max_new_tokens=max_new_tokens,
             enable_reasoning=enable_reasoning,
             metadata=metadata,
+            enable_moe_offload=enable_moe_offload,
+            moe_offload_ratio=moe_offload_ratio,
         )
     except Exception as e:
         print(f"\n{UI.RED}Failed to load model:{UI.RESET}\n")
@@ -365,38 +402,51 @@ def chat_command() -> None:
         input("\nPress Enter...")
         return
 
-    # 8. Chat loop
+    # 9. Chat loop
     clear_screen()
     print(f"{UI.BOLD}{UI.GREEN}OpenVINO model loaded.{UI.RESET}\n")
     print(f"Model    : {model_path.name}")
     print(f"Type     : {metadata.display_type}")
     print(f"Device   : {device}")
+    if metadata.is_moe:
+        moe_off_s = f"Enabled ({moe_offload_ratio}% to disk)" if enable_moe_offload else "Disabled"
+        print(f"MoE      : {moe_off_s}")
     print(f"Reasoning: {reason_label}")
     print(f"Context  : {context_length:,}")
     print(f"Max output: {max_new_tokens:,}")
     print(f"History  : {chat.history_saver.session_file}\n")
 
     print(f"{UI.DIM}Commands:{UI.RESET}")
-    print("  /clear  - clear conversation")
-    print("  /info   - show model & system hardware info")
-    print("  /file   - attach file or PDF for context (/file <path>)")
+    print("  /clear   - clear conversation")
+    print("  /info    - show model & system hardware info")
+    print("  /file    - attach file or PDF for context (/file <path>)")
     if metadata.is_vlm:
-        print("  /image  - attach image or visual PDF pages (/image <path> [page(s)])")
+        print("  /image   - attach image or visual PDF pages (/image <path> [page(s)])")
     if metadata.supports_reasoning:
-        print("  /think  - toggle reasoning mode (/think on, /think off)")
-    print("  /export - export last answer or generate to txt (/export [output.txt])")
-    print("  /unload - eject/unload model from memory (free VRAM)")
-    print("  /load   - switch or load a model into session")
-    print("  /quit   - exit\n")
+        print("  /think   - toggle reasoning mode (/think on, /think off)")
+    if metadata.is_moe:
+        print("  /moe     - configure MoE expert offload to disk (/moe <ratio%>, /moe off)")
+    print("  /hetero  - switch to Hetero Pipeline Parallelism (/hetero GPU,CPU)")
+    print("  /export  - export last answer or generate to txt (/export [output.txt])")
+    print("  /unload  - eject/unload model from memory (free VRAM)")
+    print("  /load    - switch or load a model into session")
+    print("  /quit    - exit\n")
 
     chat.run()
 
-    # 9. Clean shutdown
+    # 10. Clean shutdown
     chat.memory_monitor.stop()
     print(f"\n{UI.GREEN}Goodbye.{UI.RESET}")
 
 
-def serve_command(host: str = "0.0.0.0", port: int = 8000, device: Optional[str] = None, no_prompt: bool = False) -> None:
+def serve_command(
+    host: str = "0.0.0.0",
+    port: int = 8000,
+    device: Optional[str] = None,
+    no_prompt: bool = False,
+    enable_moe_offload: Optional[bool] = None,
+    moe_offload_ratio: Optional[int] = None,
+) -> None:
     """Starts the OpenAI-compatible FastAPI server for Open WebUI."""
     import uvicorn
     from .settings import load_settings, save_settings
@@ -419,14 +469,20 @@ def serve_command(host: str = "0.0.0.0", port: int = 8000, device: Optional[str]
 
     settings = load_settings()
     if device:
-        settings["selected_device"] = device.upper()
-        save_settings(settings)
+        settings["selected_device"] = device
+    if enable_moe_offload is not None:
+        settings["enable_moe_offload"] = enable_moe_offload
+    if moe_offload_ratio is not None:
+        settings["moe_offload_ratio"] = moe_offload_ratio
+    save_settings(settings)
 
     if not no_prompt and sys.stdin.isatty():
         prompt_change_parameters()
 
     settings = load_settings()
     active_device = settings.get("selected_device", "GPU")
+    moe_off_active = settings.get("enable_moe_offload", True)
+    moe_ratio_active = settings.get("moe_offload_ratio", 50)
 
     print("\n" + "=" * 70)
     print("  OpenVINO GenAI OpenAI-Compatible API Server")
@@ -435,6 +491,9 @@ def serve_command(host: str = "0.0.0.0", port: int = 8000, device: Optional[str]
     print(f"  Models Endpoint       : http://127.0.0.1:{port}/v1/models")
     print(f"  Chat Completions      : http://127.0.0.1:{port}/v1/chat/completions")
     print(f"  Target Hardware Device: {active_device}")
+    if active_device.upper().startswith("HETERO"):
+        print(f"  Pipeline Parallelism  : Enabled (Stages distributed across {active_device})")
+    print(f"  MoE Disk Offload      : {'Enabled (' + str(moe_ratio_active) + '% to disk)' if moe_off_active else 'Disabled'}")
     print(f"  Open WebUI URL        : http://localhost:3000")
     print("=" * 70)
     print("  [Tip] Connect in Open WebUI: Settings > Connections > OpenAI API")
@@ -524,13 +583,14 @@ def entrypoint(argv: Optional[List[str]] = None) -> None:
             if a in ("--port", "-p") and i + 1 < len(clean_argv) and clean_argv[i + 1].isdigit():
                 port = int(clean_argv[i + 1])
         no_prompt = "-y" in clean_argv or "--no-prompt" in clean_argv
-        serve_command(port=port, no_prompt=no_prompt)
+        dev = DEFAULT_HETERO_DEVICE if "--hetero" in clean_argv else None
+        serve_command(port=port, device=dev, no_prompt=no_prompt)
         return
 
     # 3. Argument parser for subcommands
     parser = argparse.ArgumentParser(
         prog="ovchat",
-        description="OpenVINO GenAI Chat & Serving Suite",
+        description="OpenVINO GenAI Chat & Serving Suite with Heterogeneous Pipeline Parallelism and MoE Offloading",
     )
     subparsers = parser.add_subparsers(dest="subcommand", help="Available subcommands")
 
@@ -541,7 +601,11 @@ def entrypoint(argv: Optional[List[str]] = None) -> None:
     serve_parser = subparsers.add_parser("serve", help="Start OpenAI-compatible FastAPI server")
     serve_parser.add_argument("--host", default="0.0.0.0", help="Host interface (default: 0.0.0.0)")
     serve_parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
-    serve_parser.add_argument("--device", choices=["GPU", "CPU", "AUTO"], default=None, help="Inference device")
+    serve_parser.add_argument("--device", default=None, help="Inference device (GPU, HETERO:GPU,CPU, CPU, AUTO)")
+    serve_parser.add_argument("--hetero", action="store_true", help="Shortcut for --device HETERO:GPU,CPU (Pipeline Parallelism Preview)")
+    serve_parser.add_argument("--moe-offload", action="store_true", default=None, help="Enable MoE weight offloading to disk")
+    serve_parser.add_argument("--no-moe-offload", action="store_true", help="Disable MoE weight offloading to disk")
+    serve_parser.add_argument("--moe-ratio", type=int, default=None, help="MoE offload ratio percentage (1-99, default 50)")
     serve_parser.add_argument("-y", "--no-prompt", action="store_true", help="Launch immediately without parameter prompt")
 
     # subcommand: stop
@@ -557,11 +621,23 @@ def entrypoint(argv: Optional[List[str]] = None) -> None:
     args, remaining = parser.parse_known_args(argv)
 
     if args.subcommand == "serve":
+        target_device = args.device
+        if args.hetero:
+            target_device = DEFAULT_HETERO_DEVICE
+
+        moe_offload = None
+        if args.no_moe_offload:
+            moe_offload = False
+        elif args.moe_offload:
+            moe_offload = True
+
         serve_command(
             host=args.host,
             port=args.port,
-            device=args.device,
+            device=target_device,
             no_prompt=args.no_prompt,
+            enable_moe_offload=moe_offload,
+            moe_offload_ratio=args.moe_ratio,
         )
     elif args.subcommand == "stop":
         stop_command(port=args.port)

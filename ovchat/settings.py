@@ -5,8 +5,12 @@ from typing import Any, Dict
 from .config import (
     CHAT_HISTORY_DIR,
     DEFAULT_CONTEXT,
+    DEFAULT_ENABLE_MOE_OFFLOAD,
     DEFAULT_ENABLE_REASONING,
+    DEFAULT_HETERO_PRIORITY,
     DEFAULT_MAX_NEW_TOKENS,
+    DEFAULT_MODEL_DISTRIBUTION_POLICY,
+    DEFAULT_MOE_OFFLOAD_RATIO,
     MODEL_ROOT,
 )
 
@@ -17,6 +21,10 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "history_dir": str(CHAT_HISTORY_DIR),
     "selected_model": "",
     "selected_device": "GPU",
+    "hetero_priorities": DEFAULT_HETERO_PRIORITY,
+    "model_distribution_policy": DEFAULT_MODEL_DISTRIBUTION_POLICY,
+    "enable_moe_offload": DEFAULT_ENABLE_MOE_OFFLOAD,
+    "moe_offload_ratio": DEFAULT_MOE_OFFLOAD_RATIO,
     "context_length": DEFAULT_CONTEXT,
     "max_new_tokens": DEFAULT_MAX_NEW_TOKENS,
     "temperature": 0.7,

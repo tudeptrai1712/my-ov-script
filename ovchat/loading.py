@@ -3,7 +3,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from .memory import MemoryMonitor, estimate_memory
+from .hardware.monitor import MemoryMonitor, estimate_memory
+from .metadata import ModelMetadata, read_model_metadata
 from .ui import UI, clamp, clear_screen, human_bytes, progress_bar
 
 
@@ -16,11 +17,19 @@ class LoadingScreen:
         device: str,
         context_length: int,
         memory_monitor: MemoryMonitor,
+        metadata: Optional[ModelMetadata] = None,
+        enable_moe_offload: bool = True,
+        moe_offload_ratio: int = 50,
+        model_distribution_policy: str = "PIPELINE_PARALLEL",
     ):
         self.model_path = model_path
         self.device = device
         self.context_length = context_length
         self.memory_monitor = memory_monitor
+        self.metadata = metadata or read_model_metadata(model_path)
+        self.enable_moe_offload = enable_moe_offload
+        self.moe_offload_ratio = moe_offload_ratio
+        self.model_distribution_policy = model_distribution_policy
 
         self.baseline_memory = memory_monitor.current
         self.running = False
@@ -42,10 +51,24 @@ class LoadingScreen:
             fraction = 0.0
 
         print("\033[2J\033[H", end="")
-        print(f"{UI.BOLD}{UI.CYAN}Loading OpenVINO model{UI.RESET}\n")
+        print(f"{UI.BOLD}{UI.CYAN}Compiling OpenVINO GenAI Pipeline{UI.RESET}\n")
 
         print(f"Model       : {self.model_path.name}")
-        print(f"Device      : {self.device}")
+        if self.device.upper().startswith("HETERO"):
+            print(f"Device      : {UI.GREEN}{self.device}{UI.RESET} {UI.DIM}(Pipeline Parallelism Preview){UI.RESET}")
+            print(f"Policy      : {self.model_distribution_policy}")
+        else:
+            print(f"Device      : {self.device}")
+
+        if self.metadata.is_moe:
+            moe_desc = self.metadata.moe_summary or "Mixture of Experts"
+            if self.enable_moe_offload and "GPU" in self.device.upper():
+                offload_str = f"{UI.GREEN}Enabled ({self.moe_offload_ratio}% offload to disk){UI.RESET}"
+            else:
+                offload_str = f"{UI.YELLOW}Disabled (full weights resident){UI.RESET}"
+            print(f"MoE Status  : {moe_desc}")
+            print(f"MoE Offload : {offload_str}")
+
         print(f"Context     : {self.context_length:,}\n")
 
         print(f"{UI.BOLD}Estimated memory{UI.RESET}")
@@ -72,8 +95,7 @@ class LoadingScreen:
         )
         print(
             f"{UI.DIM}"
-            "OpenVINO does not expose a byte-by-byte model "
-            "loading progress callback."
+            "OpenVINO compiles execution graphs and initializes device buffers."
             f"{UI.RESET}"
         )
 
@@ -92,4 +114,3 @@ class LoadingScreen:
         if self.thread:
             self.thread.join(timeout=1)
         clear_screen()
-

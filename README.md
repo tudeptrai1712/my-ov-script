@@ -1,14 +1,22 @@
 # OpenVINO GenAI - OpenAI-Compatible API Server & CLI
 
-A high-performance local AI inference suite and OpenAI-compatible serving backend for [**OpenVINO GenAI (`openvinotoolkit/openvino.genai`)**](https://github.com/openvinotoolkit/openvino.genai), featuring dual **LLM** (Text) and **VLM** (Vision-Language) multimodal support, native Intel Arc GPU (XMX) acceleration, an interactive terminal CLI, visual PDF & image inspection, and direct integration with [**Open WebUI**](https://github.com/open-webui/open-webui).
+A high-performance local AI inference suite and OpenAI-compatible serving backend for [**OpenVINO GenAI (`openvinotoolkit/openvino.genai`)**](https://github.com/openvinotoolkit/openvino.genai), featuring dual **LLM** (Text) and **VLM** (Vision-Language) multimodal support, native Intel Arc GPU (XMX) acceleration, **Heterogeneous Pipeline Parallelism**, **Mixture of Experts (MoE) Disk Offloading**, an interactive terminal CLI, visual PDF & image inspection, and direct integration with [**Open WebUI**](https://github.com/open-webui/open-webui).
 
 > [!NOTE]
 > **Open WebUI Architecture & Intel Guide**:
 > In accordance with the official Intel tutorial [Demonstrating integration of Open WebUI with OpenVINO Model Server](https://docs.openvino.ai/2025/model-server/ovms_demos_integration_with_open_webui.html), local inference is served via a dedicated OpenAI-compatible API server (`python run_server.py` on port `8000`) and connected to a full-featured [Open WebUI](https://github.com/open-webui/open-webui) instance (on port `3000`). This gives you instant access to RAG, web search, document indexing, voice TTS, and conversation branching with native Windows Intel Arc acceleration.
 
+> [!TIP]
+> **Heterogeneous Execution with Pipeline Parallelism (Preview)**:
+> In accordance with the official [OpenVINO Heterogeneous Execution Guide](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/hetero-execution.html#pipeline-parallelism-preview), models that exceed single-device memory limits can run across combined hardware devices (`HETERO:GPU,CPU`) using the `PIPELINE_PARALLEL` distribution policy. The pipeline stages are executed sequentially across devices in priority order (GPU compute first, CPU host memory second), enabling large LLMs and MoE models to run smoothly without memory exhaustion.
+
+> [!TIP]
+> **Mixture of Experts (MoE) Disk Offloading**:
+> As introduced in the OpenVINO release notes, partial expert weight offloading (`OFFLOAD_RATIO` and `ENABLE_MMAP`) enables large MoE models (such as `Gemma-4-26B-A4B` or `Qwen3-30B-A3B`) to run even on devices with 16 GB memory while maintaining high tokens-per-second generation rates. Only active experts and backbone layers are kept in GPU memory while inactive expert weights are paged dynamically from disk.
+
 > [!WARNING]
 > **Intel NPU Advisory (Currently Disabled)**:
-> Intel NPU execution is **temporarily disabled / unstable** in the current OpenVINO GenAI release (`NPU compiler does not support platform 'AUTO_DETECT' for architecture 5010`). Please select **`GPU`** (Intel Arc) or **`CPU`** as your target hardware device for all generation and chat workflows until upstream Intel compiler updates are delivered.
+> Intel NPU execution is **temporarily disabled / unstable** in the current OpenVINO GenAI release (`NPU compiler does not support platform 'AUTO_DETECT' for architecture 5010`). Please select **`GPU`** (Intel Arc), **`HETERO:GPU,CPU`**, or **`CPU`** as your target hardware device for all generation and chat workflows until upstream Intel compiler updates are delivered.
 
 > [!WARNING]
 > **Performance Notice (Web UI vs. CLI)**:
@@ -24,6 +32,18 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
 ---
 
 ## Key Features
+
+- **Heterogeneous Execution with Pipeline Parallelism (Preview)**:
+  - Configures `HETERO:GPU,CPU` using `MODEL_DISTRIBUTION_POLICY=PIPELINE_PARALLEL` according to the [Intel OpenVINO Pipeline Parallelism Documentation](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/hetero-execution.html#pipeline-parallelism-preview).
+  - Automatically divides sequential model stages across Intel Arc GPU and host CPU memory based on operation memory requirements.
+  - Follows Intel best practices by prioritizing GPU for initial acceleration stages and placing host CPU at the end of the priority chain for memory fallback.
+  - Enables models too large for single GPU VRAM to execute seamlessly without crashing.
+
+- **Mixture of Experts (MoE) Offloading to Disk**:
+  - Automatically identifies MoE architectures (e.g. `Gemma-4-26B-A4B`, `Qwen3-30B-A3B`) via metadata inspection (`enable_moe_block`, `num_experts`, `top_k_experts`).
+  - Configures the GPU plugin's native MoE offload properties (`OFFLOAD_RATIO` and `ENABLE_MMAP`).
+  - Allows 26B/30B MoE models to run locally even on 16 GB memory systems by keeping only active experts in VRAM and paging inactive expert weights on-demand from disk.
+  - Dynamic user control via CLI (`--moe-offload`, `--moe-ratio`) and chat command (`/moe <ratio%>`).
 
 - **Dual LLM & VLM Multimodal Support**:
   - Automatically identifies model architecture via metadata inspection (`model.safetensors.index.json`, `config.json`, or `.xml` topology).
@@ -50,8 +70,9 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
 
 - **Direct Open WebUI Serving (OpenAI-Compatible FastAPI Backend)**:
   - Serves local models via OpenAI `/v1` endpoints (`/v1/models`, `/v1/chat/completions`) with full streaming support.
-  - Defaults to high-speed Intel Arc GPU execution.
-  - Interactive startup prompt lets you review and adjust load parameters (device, context length, max tokens, temperature, reasoning) before launching.
+  - Exposes `(GPU)`, `(HETERO)`, and `(CPU)` targets directly in Open WebUI's model dropdown.
+  - Defaults to high-speed Intel Arc GPU execution or Hetero Pipeline Parallelism.
+  - Interactive startup prompt lets you review and adjust load parameters (device, context length, max tokens, temperature, reasoning, MoE offloading) before launching.
 
 - **Dynamic Model Load / Unload & Eject**:
   - Frees GPU VRAM and system memory on demand (`gc.collect()`).
@@ -95,17 +116,17 @@ my-ov-script/
 ├── ovchat/
 │   ├── __init__.py             # Package exports & dependency guard
 │   ├── cli.py                  # Unified subcommands (chat, serve, stop, check, models)
-│   ├── engine.py               # Pure OpenVINO GenAI LLM & VLM runtime wrapper
+│   ├── engine.py               # Pure OpenVINO GenAI LLM & VLM runtime wrapper (HETERO & MoE offload)
 │   ├── parser.py               # Path sanitization, quotes & inline tag extraction
 │   ├── files.py                # Document text parser & PDF-to-image rasterizer
-│   ├── metadata.py             # Model topology & metadata inspection
+│   ├── metadata.py             # Model topology, MoE detection & metadata inspection
 │   ├── history.py              # Chat logging & markdown transcript persistence
 │   ├── settings.py             # Persistent user_config.json management
 │   ├── ui.py                   # ANSI styling, layout formatting & progress bars
 │   ├── models.py               # Model scanner & disk catalog
 │   ├── hardware/               # Hardware specs & live telemetry
 │   │   ├── __init__.py
-│   │   ├── specs.py            # Static discovery (CPU, RAM, Intel Arc GPU EUs, NPU)
+│   │   ├── specs.py            # Static discovery (CPU, RAM, Intel Arc GPU EUs, NPU) & HETERO fit
 │   │   └── monitor.py          # Background polling (VRAM/RAM usage)
 │   ├── commands/               # Modular slash command system
 │   │   ├── __init__.py
@@ -113,8 +134,8 @@ my-ov-script/
 │   │   ├── router.py           # Command dispatcher
 │   │   ├── attachments.py      # /file, /image, /pdf-image handlers
 │   │   ├── export.py           # /export, /save, /export-chat handlers
-│   │   └── session.py          # /clear, /info, /think, /unload, /load, /quit
-│   └── web/                    # FastAPI OpenAI /v1 API server
+│   │   └── session.py          # /clear, /info, /think, /moe, /hetero, /unload, /load, /quit
+│   └── web/                    # FastAPI OpenAI /v1 API server (GPU / HETERO / CPU)
 │       ├── __init__.py
 │       └── app.py
 ```
@@ -141,7 +162,6 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-
 ---
 
 ## Quickstart Guide
@@ -161,8 +181,12 @@ python ovchat.py
 The interactive CLI will:
 1. Auto-verify dependencies.
 2. Inspect and display system hardware specifications (CPU cores, RAM total/available, Intel Arc GPU memory & EUs, NPU status).
-3. Display available models alongside their hardware fit (whether the model fits into GPU memory and remaining KV headroom).
-4. Prioritize Intel Arc GPU acceleration and run with maximum raw tokens/second throughput.
+3. Display available models alongside their hardware fit (whether the model fits into GPU memory, requires MoE disk offloading, or fits via Heterogeneous Pipeline Parallelism).
+4. Prompt for execution device:
+   - `[1] GPU` (Intel Arc GPU acceleration)
+   - `[2] HETERO:GPU,CPU` (Pipeline Parallelism Preview: stages split between GPU and CPU)
+   - `[3] CPU` (Reference baseline)
+5. If an MoE model is selected (e.g. `Gemma-4-26B-A4B`), prompts to configure MoE expert offload to disk (e.g. 50%).
 
 ---
 
@@ -205,23 +229,31 @@ PDFs are automatically rendered into crisp image tensors via Chromium's PDFium e
 Start the high-performance local server:
 
 ```bash
-# Using the unified CLI:
+# Using the unified CLI (Default: GPU):
 ovchat serve --port 8000
 
-# Or using the dedicated runner:
-python run_server.py --port 8000
+# Launch with Heterogeneous Pipeline Parallelism (GPU + CPU):
+ovchat serve --hetero --port 8000
 
-# Optional flags:
-ovchat serve --device GPU        # Force Intel Arc GPU inference (default)
-ovchat serve --device CPU        # Force CPU inference
-ovchat serve -y                  # Skip parameter confirmation prompt
-ovchat stop                      # Stop running server (or python kill_server.py)
+# Force specific device target:
+ovchat serve --device HETERO:GPU,CPU
+ovchat serve --device GPU
+ovchat serve --device CPU
+
+# Configure MoE offloading ratio (e.g. 50% expert weights offloaded to disk):
+ovchat serve --moe-ratio 50
+
+# Dedicated runners:
+python run_server.py --port 8000
+python run_server.py --hetero
+
+# Stop running server:
+ovchat stop                      # Or: python kill_server.py
 ```
 
-- **Load Parameter Confirmation**: When launched interactively, the server displays current parameters (Device, Context Length, Max Tokens, Temperature, Top-P, Reasoning) and lets you change them before startup.
-- **Default Device**: Intel Arc **GPU** is the recommended default.
+- **Load Parameter Confirmation**: When launched interactively, the server displays current parameters (Device, Pipeline Parallelism Policy, Context Length, Max Tokens, Temperature, Top-P, Reasoning, MoE Offloading) and lets you adjust them before startup.
 - **OpenAI API Base URL**: `http://127.0.0.1:8000/v1`
-- **Models List Endpoint**: `http://127.0.0.1:8000/v1/models` (exposes both default, `(GPU)`, and `(CPU)` model entries for selection in Open WebUI)
+- **Models List Endpoint**: `http://127.0.0.1:8000/v1/models` (exposes default, `(GPU)`, `(HETERO)`, and `(CPU)` entries for direct selection in Open WebUI)
 - **Chat Completions**: `http://127.0.0.1:8000/v1/chat/completions`
 - **To stop the server**: Press `q` or `k` in console, type `quit`, run `ovchat stop`, or run `python kill_server.py`.
 
@@ -250,13 +282,15 @@ docker run -d -p 3000:8080 -e OPENAI_API_BASE_URL=http://host.docker.internal:80
    - If running inside Docker: `http://host.docker.internal:8000/v1`
 4. Set **API Key**: `openvino` (or any string).
 5. Click **Verify / Save Connection**.
-6. Open WebUI will instantly pull your local models (e.g. `Gemma-4-E4B`) from your server with complete streaming, document upload, and vision support!
+6. Open WebUI will instantly pull your local models:
+   - Select `Gemma-4-E4B (GPU)` for high-speed Arc GPU acceleration.
+   - Select `Gemma-4-26B-A4B (HETERO)` for multi-device pipeline parallel execution!
 
 ---
 
 ### 5. Inspecting Models & Hardware Fit
 
-Inspect local models, their disk footprints, precision, and GPU memory fit:
+Inspect local models, MoE architecture indicators, their disk footprints, precision, and GPU memory fit:
 
 ```bash
 # Using unified CLI:
@@ -265,7 +299,6 @@ ovchat models
 # Or using Python runner:
 python ovchat.py models
 ```
-
 
 ---
 
@@ -306,10 +339,12 @@ While chatting in the terminal (`python ovchat.py` or `python ovchat_fallback.py
 | Command | Description |
 | :--- | :--- |
 | `/clear` | Clears conversation history and starts a fresh transcript |
-| `/info` | Displays active model, hardware device, memory usage, and load time |
+| `/info` | Displays active model, hardware device, pipeline policy, MoE offload ratio, memory usage, and load time |
 | `/image <path> [page(s)] [prompt]` | Attaches an image or renders PDF pages visually (VLMs only) |
 | `/file <path>` | Extracts raw text context from a file or PDF document into prompt |
 | `/think` | Toggles reasoning mode (`/think on` or `/think off`) |
+| `/moe [ratio% \| off]` | Configures MoE expert offload to disk (e.g. `/moe 50` or `/moe off`) |
+| `/hetero [devices]` | Switches to Heterogeneous Pipeline Parallelism (e.g. `/hetero GPU,CPU`) |
 | `/export [file.txt]` | Exports the **last generated** assistant answer to a `.txt` file |
 | `/export ["prompt" "file.txt"]` | Runs prompt (supports inline `/file` & `/image`), streams output, and saves answer directly to `.txt` |
 | `/export-chat [file.txt]` | Exports the entire chat conversation to a `.txt` file |
@@ -317,35 +352,20 @@ While chatting in the terminal (`python ovchat.py` or `python ovchat_fallback.py
 | `/load` | Prompts with a list of available models to load without restarting |
 | `/quit` | Exits the chat session |
 
-### Advanced `/export` Examples:
-
-```text
-# 1. One-shot prompt with visual PDF page attachment:
-/export "Giải chi tiết câu 1 /image \"C:\path\to\de-toan.pdf:1\"" "cau1_solution.txt"
-
-# 2. One-shot prompt with document text attachment saved to text file:
-/export "Summarize key findings in 3 bullet points /file report.pdf" "summary.txt"
-
-# 3. Quoted file paths with spaces:
-/export "Translate to French /file \"my notes/meeting.txt\"" "french_meeting.txt"
-
-# 4. Quick prompt generation to timestamped file:
-/export "Write a Python script for quicksort"
-
-# 5. Save the previous answer after reading it in console:
-/export final_answer.txt
-```
-
 ---
 
 ## Configuration & Environment Variables
 
-User defaults are saved automatically in [`user_config.json`](user_config.json). You can also configure default paths via environment variables:
+User defaults are saved automatically in [`user_config.json`](user_config.json). You can also configure default paths and runtime modes via environment variables:
 
-| Environment Variable | Default Path | Description |
+| Environment Variable | Default Value | Description |
 | :--- | :--- | :--- |
 | `OVCHAT_MODEL_ROOT` | `D:\AI models\openvino-genai` | Root directory where OpenVINO models are stored |
 | `OVCHAT_HISTORY_DIR` | `D:\AI models\openvino-genai\chat history` | Directory where chat session markdown transcripts are saved |
+| `OVCHAT_HETERO_PRIORITY` | `GPU,CPU` | Device priority list for Heterogeneous Pipeline Parallelism |
+| `OVCHAT_MODEL_DISTRIBUTION_POLICY` | `PIPELINE_PARALLEL` | Model distribution policy for multi-device execution |
+| `OVCHAT_ENABLE_MOE_OFFLOAD` | `1` | Enable Mixture of Experts weight offloading to disk (`1`/`0`) |
+| `OVCHAT_MOE_OFFLOAD_RATIO` | `50` | Percentage of MoE expert weights offloaded to disk (1-99%) |
 
 ### Sample `user_config.json`:
 ```json
@@ -354,11 +374,15 @@ User defaults are saved automatically in [`user_config.json`](user_config.json).
   "history_dir": "D:\\AI models\\openvino-genai\\chat history",
   "selected_model": "Gemma-4-E4B",
   "selected_device": "GPU",
+  "hetero_priorities": "GPU,CPU",
+  "model_distribution_policy": "PIPELINE_PARALLEL",
+  "enable_moe_offload": true,
+  "moe_offload_ratio": 50,
   "context_length": 32768,
   "max_new_tokens": 8192,
   "temperature": 0.7,
   "top_p": 0.95,
-  "enable_reasoning": false
+  "enable_reasoning": true
 }
 ```
 

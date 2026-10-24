@@ -24,6 +24,19 @@ DEFAULT_ENABLE_REASONING: bool = os.environ.get(
     "OVCHAT_ENABLE_REASONING", ""
 ).strip().lower() in ("1", "true", "yes")
 
+# Heterogeneous execution defaults (OpenVINO Pipeline Parallelism Preview)
+DEFAULT_HETERO_PRIORITY: str = os.environ.get("OVCHAT_HETERO_PRIORITY", "GPU,CPU")
+DEFAULT_HETERO_DEVICE: str = f"HETERO:{DEFAULT_HETERO_PRIORITY}"
+DEFAULT_MODEL_DISTRIBUTION_POLICY: str = os.environ.get(
+    "OVCHAT_MODEL_DISTRIBUTION_POLICY", "PIPELINE_PARALLEL"
+)
+
+# Mixture of Experts (MoE) offloading defaults (OpenVINO 2026 GPU plugin)
+DEFAULT_ENABLE_MOE_OFFLOAD: bool = os.environ.get(
+    "OVCHAT_ENABLE_MOE_OFFLOAD", "1"
+).strip().lower() not in ("0", "false", "no")
+DEFAULT_MOE_OFFLOAD_RATIO: int = int(os.environ.get("OVCHAT_MOE_OFFLOAD_RATIO", "50"))
+
 # Directory where chat history transcripts are always saved
 CHAT_HISTORY_DIR: Path = Path(
     os.environ.get(
@@ -31,4 +44,3 @@ CHAT_HISTORY_DIR: Path = Path(
         r"D:\AI models\openvino-genai\chat history",
     )
 )
-

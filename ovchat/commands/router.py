@@ -5,8 +5,10 @@ from .base import CommandContext, CommandHandler, CommandResult
 from .export import handle_export, handle_export_chat
 from .session import (
     handle_clear,
+    handle_hetero,
     handle_info,
     handle_load,
+    handle_moe,
     handle_quit,
     handle_think,
     handle_unload,
@@ -41,6 +43,8 @@ class CommandRouter:
         self.register(["/clear", "/reset"], handle_clear)
         self.register(["/info", "/status"], handle_info)
         self.register(["/think", "/reason", "/reasoning"], handle_think)
+        self.register(["/moe", "/offload"], handle_moe)
+        self.register(["/hetero", "/pipeline"], handle_hetero)
         self.register(["/unload", "/eject"], handle_unload)
         self.register(["/load", "/model", "/switch"], handle_load)
         self.register(["/quit", "/exit", "/q"], handle_quit)
@@ -77,4 +81,3 @@ class CommandRouter:
 
         # Unrecognized slash command: let caller decide or warn
         return None
-

@@ -7,8 +7,11 @@ import openvino as ov
 from .commands import CommandContext, CommandRouter
 from .config import (
     DEFAULT_CONTEXT,
+    DEFAULT_ENABLE_MOE_OFFLOAD,
     DEFAULT_ENABLE_REASONING,
     DEFAULT_MAX_NEW_TOKENS,
+    DEFAULT_MODEL_DISTRIBUTION_POLICY,
+    DEFAULT_MOE_OFFLOAD_RATIO,
 )
 from .engine import GenerationResult, InferenceEngine
 from .hardware import MemoryMonitor, powershell_gpu_memory
@@ -35,6 +38,9 @@ class Chat:
         top_p: float = 0.95,
         enable_reasoning: bool = DEFAULT_ENABLE_REASONING,
         metadata: Optional[ModelMetadata] = None,
+        enable_moe_offload: bool = DEFAULT_ENABLE_MOE_OFFLOAD,
+        moe_offload_ratio: int = DEFAULT_MOE_OFFLOAD_RATIO,
+        model_distribution_policy: str = DEFAULT_MODEL_DISTRIBUTION_POLICY,
     ):
         self.model_path = Path(model_path)
         self.device = device
@@ -43,6 +49,9 @@ class Chat:
         self.temperature = temperature
         self.top_p = top_p
         self.metadata = metadata or read_model_metadata(self.model_path)
+        self.enable_moe_offload = enable_moe_offload
+        self.moe_offload_ratio = moe_offload_ratio
+        self.model_distribution_policy = model_distribution_policy
 
         # 1. Background memory monitor
         self.memory_monitor = MemoryMonitor()
@@ -71,6 +80,9 @@ class Chat:
             top_p=self.top_p,
             enable_reasoning=enable_reasoning,
             metadata=self.metadata,
+            enable_moe_offload=self.enable_moe_offload,
+            moe_offload_ratio=self.moe_offload_ratio,
+            model_distribution_policy=self.model_distribution_policy,
         )
 
         # 4. Command Router & Context
@@ -87,6 +99,10 @@ class Chat:
             self.device,
             self.context_length,
             self.memory_monitor,
+            metadata=self.metadata,
+            enable_moe_offload=self.enable_moe_offload,
+            moe_offload_ratio=self.moe_offload_ratio,
+            model_distribution_policy=self.model_distribution_policy,
         )
         loading.start()
 
@@ -136,7 +152,13 @@ class Chat:
         handle_think(arg, self.cmd_context)
         return self.engine.reasoning_enabled
 
-    def load_model(self, model_path: Path, device: str) -> None:
+    def load_model(
+        self,
+        model_path: Path,
+        device: str,
+        enable_moe_offload: Optional[bool] = None,
+        moe_offload_ratio: Optional[int] = None,
+    ) -> None:
         """Dynamically loads and switches active model within current session."""
         print(f"\n{UI.CYAN}Switching model to: {model_path.name} on {device}...{UI.RESET}")
         self.engine.unload()
@@ -146,11 +168,20 @@ class Chat:
         self.device = device
         self.metadata = meta
 
+        if enable_moe_offload is not None:
+            self.enable_moe_offload = enable_moe_offload
+        if moe_offload_ratio is not None:
+            self.moe_offload_ratio = moe_offload_ratio
+
         loading = LoadingScreen(
             self.model_path,
             self.device,
             self.context_length,
             self.memory_monitor,
+            metadata=self.metadata,
+            enable_moe_offload=self.enable_moe_offload,
+            moe_offload_ratio=self.moe_offload_ratio,
+            model_distribution_policy=self.model_distribution_policy,
         )
         loading.start()
 
@@ -164,6 +195,9 @@ class Chat:
                 top_p=self.top_p,
                 enable_reasoning=self.reasoning_enabled,
                 metadata=self.metadata,
+                enable_moe_offload=self.enable_moe_offload,
+                moe_offload_ratio=self.moe_offload_ratio,
+                model_distribution_policy=self.model_distribution_policy,
             )
             self.load_time = self.engine.load(warmup=True)
             self.cmd_context.engine = self.engine

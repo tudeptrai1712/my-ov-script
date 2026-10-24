@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import openvino as ov
 import psutil
 
+from ..config import DEFAULT_HETERO_PRIORITY, DEFAULT_MOE_OFFLOAD_RATIO
 from ..metadata import ModelMetadata, check_device_compatibility, read_model_metadata
 from ..ui import UI, human_bytes, pad_ansi, visible_len
 
@@ -176,29 +177,57 @@ def get_hardware_specs(cached: bool = True) -> HardwareSpecs:
 def get_model_hardware_fit(
     metadata: ModelMetadata,
     specs: Optional[HardwareSpecs] = None,
+    device: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
-    Evaluates whether a model fits in GPU memory (with KV cache headroom)
-    or spills to system RAM, and lists compatible execution devices.
+    Evaluates whether a model fits in GPU memory (with KV cache headroom,
+    taking MoE offloading and Heterogeneous pipeline execution into account).
     Returns (fit_status_colored, compatible_devices_str).
     """
     if specs is None:
         specs = get_hardware_specs()
 
-    comp_devices = "GPU, CPU"
+    has_gpu = bool(specs.gpus)
+    comp_devices = "GPU, HETERO:GPU,CPU, CPU" if has_gpu else "CPU"
     model_bytes = metadata.weight_size_bytes
     primary_gpu_mem = specs.gpus[0].total_memory if specs.gpus else 0
+    ram_avail = specs.ram_available_bytes
+    combined_mem = primary_gpu_mem + ram_avail
+
+    # Specific device check if passed
+    dev_check = (device or "").upper()
+    if dev_check.startswith("HETERO"):
+        if model_bytes <= combined_mem:
+            fit_status = f"{UI.GREEN}Fits in HETERO Pipeline (GPU + CPU RAM){UI.RESET}"
+        else:
+            fit_status = f"{UI.YELLOW}Exceeds combined HETERO capacity{UI.RESET}"
+        return fit_status, comp_devices
 
     if primary_gpu_mem > 0:
         if model_bytes <= primary_gpu_mem:
             headroom = primary_gpu_mem - model_bytes
             fit_status = f"{UI.GREEN}Fits in GPU (+{human_bytes(headroom)} KV){UI.RESET}"
+        elif metadata.is_moe:
+            # MoE offloading partial weights to disk/RAM
+            # For MoE models, active parameter weights represent ~25-40% of total weights
+            offload_ratio = DEFAULT_MOE_OFFLOAD_RATIO
+            est_resident = int(model_bytes * (1.0 - (offload_ratio / 100.0) * 0.70))
+            if est_resident <= primary_gpu_mem:
+                fit_status = f"{UI.GREEN}Fits in GPU (MoE Offload {offload_ratio}% to disk){UI.RESET}"
+            elif model_bytes <= combined_mem:
+                fit_status = f"{UI.CYAN}Fits via HETERO:GPU,CPU (Pipeline Parallelism){UI.RESET}"
+            else:
+                overflow = model_bytes - primary_gpu_mem
+                fit_status = f"{UI.YELLOW}Exceeds GPU by {human_bytes(overflow)} (spills to RAM){UI.RESET}"
         else:
             overflow = model_bytes - primary_gpu_mem
-            fit_status = f"{UI.YELLOW}Exceeds GPU by {human_bytes(overflow)} (spills to RAM){UI.RESET}"
+            if model_bytes <= combined_mem:
+                fit_status = f"{UI.CYAN}Fits via HETERO:GPU,CPU (Pipeline Parallelism){UI.RESET}"
+            else:
+                fit_status = f"{UI.YELLOW}Exceeds GPU by {human_bytes(overflow)} (spills to RAM){UI.RESET}"
     else:
-        if specs.ram_available_bytes > 0 and model_bytes <= specs.ram_available_bytes:
-            fit_status = f"{UI.GREEN}Fits in RAM ({human_bytes(specs.ram_available_bytes)} free){UI.RESET}"
+        if ram_avail > 0 and model_bytes <= ram_avail:
+            fit_status = f"{UI.GREEN}Fits in RAM ({human_bytes(ram_avail)} free){UI.RESET}"
         else:
             fit_status = f"{UI.YELLOW}High RAM usage{UI.RESET}"
 
@@ -250,6 +279,11 @@ def format_hardware_specs_card(
     else:
         lines.append(f"{UI.BOLD}|{UI.RESET}  {UI.CYAN}NPU{UI.RESET} : No OpenVINO-compatible NPU detected")
 
+    # Hardware acceleration modes note
+    modes = "GPU (Arc)"
+    if specs.gpus:
+        modes += " | HETERO:GPU,CPU (Pipeline Parallelism) | MoE Disk Offload"
+    lines.append(f"{UI.BOLD}|{UI.RESET}  {UI.GREEN}Acc : {modes}{UI.RESET}")
     lines.append(f"{UI.BOLD}|{UI.RESET}  {UI.DIM}OV  : OpenVINO {specs.openvino_version}{UI.RESET}")
     lines.append(f"{UI.BOLD}+{'-' * (width - 2)}+{UI.RESET}")
     return lines
@@ -294,7 +328,8 @@ def format_hardware_specs_box(specs: HardwareSpecs, width: int = 40) -> List[str
             lines.append(f"| {pad_ansi(f'{UI.CYAN}NPU{UI.RESET}: {n_str}', inner_w)} |")
             lines.append(f"| {pad_ansi(f'{UI.DIM}     (Disabled in GenAI){UI.RESET}', inner_w)} |")
 
-    lines.append(f"| {pad_ansi(f'{UI.DIM} OV: OpenVINO {specs.openvino_version}{UI.RESET}', inner_w)} |")
+    lines.append(f"| {pad_ansi(f'{UI.DIM}HETERO: Pipeline Parallelism Active{UI.RESET}', inner_w)} |")
+    lines.append(f"| {pad_ansi(f'{UI.DIM}OV: OpenVINO {specs.openvino_version}{UI.RESET}', inner_w)} |")
     lines.append(f"+{'-' * (width - 2)}+")
     return lines
 
@@ -316,7 +351,8 @@ def format_models_box(
     for i, (m, meta, fit_status, comp_devices) in enumerate(model_items, start=1):
         m_name = m.name
         size_s = human_bytes(meta.weight_size_bytes)
-        line1 = f"{UI.BOLD}{i}. {m_name}{UI.RESET} [{size_s}]"
+        moe_tag = f" {UI.MAGENTA}[{meta.moe_summary}]{UI.RESET}" if meta.is_moe else ""
+        line1 = f"{UI.BOLD}{i}. {m_name}{UI.RESET}{moe_tag} [{size_s}]"
         lines.append(f"| {pad_ansi(line1, inner_w)} |")
 
         t_short = "VLM" if meta.is_vlm else "LLM"
@@ -379,7 +415,8 @@ def render_hardware_and_models(
         print(f"{UI.BOLD}{UI.CYAN}Available Models:{UI.RESET} {UI.DIM}({root_str}){UI.RESET}\n")
         for i, (m, meta, fit_status, comp_devices) in enumerate(model_items, start=1):
             size_str = human_bytes(meta.weight_size_bytes)
-            print(f"  {UI.BOLD}{i}. {m.name}{UI.RESET}  {UI.YELLOW}[{size_str}]{UI.RESET}")
+            moe_tag = f" {UI.MAGENTA}[{meta.moe_summary}]{UI.RESET}" if meta.is_moe else ""
+            print(f"  {UI.BOLD}{i}. {m.name}{UI.RESET}{moe_tag}  {UI.YELLOW}[{size_str}]{UI.RESET}")
             print(
                 f"     {UI.DIM}Type:{UI.RESET} {meta.display_type} | "
                 f"{UI.DIM}Precision:{UI.RESET} {meta.precision.upper()}"
@@ -393,19 +430,42 @@ def render_hardware_and_models(
 def get_devices(metadata: Optional[ModelMetadata] = None) -> List[str]:
     """
     Retrieve list of available OpenVINO hardware device names.
-    If metadata is provided, filters out any devices incompatible with the model.
+    Supports individual devices (GPU, CPU) and Heterogeneous Pipeline Parallelism targets.
     """
     core = ov.Core()
     try:
         raw_devices = list(core.available_devices)
     except Exception:
-        return []
+        raw_devices = []
+
+    devices: List[str] = []
+
+    # 1. Primary accelerators (GPU, CPU, etc.)
+    has_gpu = any(d.upper().startswith("GPU") for d in raw_devices)
+    has_cpu = "CPU" in [d.upper() for d in raw_devices]
+
+    if has_gpu:
+        devices.append("GPU")
+    if has_gpu and has_cpu:
+        devices.append(f"HETERO:{DEFAULT_HETERO_PRIORITY}")
+    if has_cpu:
+        devices.append("CPU")
+
+    # Multi-GPU setups (e.g. GPU.0, GPU.1)
+    gpus = [d for d in raw_devices if d.upper().startswith("GPU.")]
+    if len(gpus) > 1:
+        devices.append(f"HETERO:{','.join(gpus)},CPU")
+
+    # Include any remaining raw devices not already represented
+    for d in raw_devices:
+        if d.upper() not in ("GPU", "CPU") and d not in devices:
+            devices.append(d)
 
     if metadata is None:
-        return raw_devices
+        return devices
 
     compatible: List[str] = []
-    for dev in raw_devices:
+    for dev in devices:
         is_ok, _ = check_device_compatibility(dev, metadata, core)
         if is_ok:
             compatible.append(dev)
@@ -417,76 +477,56 @@ def choose_device(metadata: Optional[ModelMetadata] = None) -> Optional[str]:
     """
     Interactively prompts the user to select an OpenVINO execution device.
     Displays detailed hardware specs next to each compatible device.
-    Prioritizes Intel Arc GPU as choice [1] for accelerated inference.
+    Includes Heterogeneous Pipeline Parallelism (GPU + CPU) and Intel Arc GPU acceleration.
     """
-    core = ov.Core()
-    try:
-        raw_devices = list(core.available_devices)
-    except Exception:
-        raw_devices = []
-
-    if not raw_devices:
-        print(f"{UI.RED}No OpenVINO devices detected.{UI.RESET}")
-        input("Press Enter...")
-        return None
-
     specs = get_hardware_specs()
-
-    # Evaluate compatibility for each detected device
-    compatible_devices: List[str] = []
-    hidden_devices: List[Tuple[str, str]] = []
-
-    for dev in raw_devices:
-        if metadata is not None:
-            is_ok, reason = check_device_compatibility(dev, metadata, core)
-            if is_ok:
-                compatible_devices.append(dev)
-            else:
-                hidden_devices.append((dev, reason or "Incompatible with model"))
-        else:
-            compatible_devices.append(dev)
+    compatible_devices = get_devices(metadata)
 
     if not compatible_devices:
         print(
             f"{UI.RED}No compatible OpenVINO devices found for {metadata.name if metadata else 'model'}.{UI.RESET}"
         )
-        if hidden_devices:
-            for dev, reason in hidden_devices:
-                print(f"  - {dev}: {reason}")
         input("\nPress Enter...")
         return None
 
-    # Prioritize GPU as default [1] for accelerated inference
-    priority = {"GPU": 0, "CPU": 1, "NPU": 2}
-    compatible_devices.sort(key=lambda d: priority.get(d.split(".")[0].upper(), 99))
+    # Priority sorting: GPU -> HETERO -> CPU -> NPU
+    def dev_priority(d: str) -> int:
+        u = d.upper()
+        if u == "GPU" or u.startswith("GPU."):
+            return 0
+        if u.startswith("HETERO"):
+            return 1
+        if u.startswith("CPU"):
+            return 2
+        return 99
+
+    compatible_devices.sort(key=dev_priority)
 
     print()
     if metadata is not None:
-        print(f"{UI.BOLD}Compatible OpenVINO devices for {metadata.name}{UI.RESET}")
+        moe_note = f" [{metadata.moe_summary}]" if metadata.is_moe else ""
+        print(f"{UI.BOLD}Execution devices for {metadata.name}{moe_note}:{UI.RESET}")
     else:
-        print(f"{UI.BOLD}Available OpenVINO devices{UI.RESET}")
+        print(f"{UI.BOLD}Available OpenVINO execution devices:{UI.RESET}")
 
     for i, device in enumerate(compatible_devices, start=1):
         dev_upper = device.upper()
         detail = ""
-        if dev_upper.startswith("GPU") and specs.gpus:
+        if dev_upper.startswith("HETERO"):
+            detail = f" (Pipeline Parallelism Preview: stages split across {device.split(':', 1)[-1]})"
+        elif dev_upper.startswith("GPU") and specs.gpus:
             g = specs.gpus[0]
             eu_s = f", {g.execution_units} EUs" if g.execution_units else ""
-            detail = f" ({g.name} - {human_bytes(g.total_memory)} memory{eu_s})"
+            moe_hint = " - MoE Disk Offload enabled" if metadata and metadata.is_moe else ""
+            detail = f" ({g.name} - {human_bytes(g.total_memory)} memory{eu_s}{moe_hint})"
         elif dev_upper.startswith("CPU"):
-            detail = f" ({specs.cpu_name} - {specs.cpu_cores_physical} physical / {specs.cpu_cores_logical} logical cores)"
+            detail = f" ({specs.cpu_name} - {specs.cpu_cores_physical}C/{specs.cpu_cores_logical}T)"
         elif dev_upper.startswith("NPU") and specs.npus:
             n = specs.npus[0]
             arch_s = f" - Arch {n.architecture}" if n.architecture else ""
             detail = f" ({n.name}{arch_s})"
 
         print(f"  {i}. {device}{UI.DIM}{detail}{UI.RESET}")
-
-    # Show hidden options informatively so user knows why a device was omitted
-    if hidden_devices:
-        print()
-        for dev, reason in hidden_devices:
-            print(f"  {UI.DIM}[Hidden unavailable: {dev} - {reason}]{UI.RESET}")
 
     print()
 
@@ -504,4 +544,3 @@ def choose_device(metadata: Optional[ModelMetadata] = None) -> Optional[str]:
             pass
 
         print(f"{UI.YELLOW}Invalid selection.{UI.RESET}")
-
