@@ -274,7 +274,7 @@ def format_hardware_specs_card(
             arch_s = f" [Arch {n.architecture}]" if n.architecture else ""
             lines.append(
                 f"{UI.BOLD}|{UI.RESET}  {UI.CYAN}NPU{UI.RESET} : {n.name}{arch_s} "
-                f"{UI.DIM}(Temporarily disabled in GenAI release){UI.RESET}"
+                f"{UI.GREEN}(LLMs supported){UI.RESET}"
             )
     else:
         lines.append(f"{UI.BOLD}|{UI.RESET}  {UI.CYAN}NPU{UI.RESET} : No OpenVINO-compatible NPU detected")
@@ -283,6 +283,8 @@ def format_hardware_specs_card(
     modes = "GPU (Arc)"
     if specs.gpus:
         modes += " | HETERO:GPU,CPU (Pipeline Parallelism) | MoE Disk Offload"
+    if specs.npus:
+        modes += " | NPU (LLM)"
     lines.append(f"{UI.BOLD}|{UI.RESET}  {UI.GREEN}Acc : {modes}{UI.RESET}")
     lines.append(f"{UI.BOLD}|{UI.RESET}  {UI.DIM}OV  : OpenVINO {specs.openvino_version}{UI.RESET}")
     lines.append(f"{UI.BOLD}+{'-' * (width - 2)}+{UI.RESET}")

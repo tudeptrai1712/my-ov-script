@@ -12,11 +12,19 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
 
 > [!TIP]
 > **Mixture of Experts (MoE) Disk Offloading**:
-> As introduced in the OpenVINO release notes, partial expert weight offloading (`OFFLOAD_RATIO` and `ENABLE_MMAP`) enables large MoE models (such as `Gemma-4-26B-A4B` or `Qwen3-30B-A3B`) to run even on devices with 16 GB memory while maintaining high tokens-per-second generation rates. Only active experts and backbone layers are kept in GPU memory while inactive expert weights are paged dynamically from disk.
+> As introduced in the OpenVINO release notes, partial expert weight offloading (`OFFLOAD_RATIO` and `ENABLE_MMAP`) enables large MoE models to run even on devices with 16 GB memory while maintaining high tokens-per-second generation rates. Only active experts and backbone layers are kept in GPU memory while inactive expert weights are paged dynamically from disk.
+
+> [!TIP]
+> **Intel NPU Acceleration for LLMs**:
+> Large Language Models (LLMs) can now run directly on the **Intel NPU** (`device: NPU`). NPU acceleration delivers highly efficient, low-power local text generation on Intel Core Ultra processors (Meteor Lake, Lunar Lake, Arrow Lake).
+
+> [!NOTE]
+> **VLM Verification in Progress**:
+> We are currently testing and verifying whether selected Vision-Language Models (VLMs) work properly across all available execution devices (including NPU and Intel Arc GPU). Support status and validated model matrices will be updated as testing concludes.
 
 > [!WARNING]
-> **Intel NPU Advisory (Currently Disabled)**:
-> Intel NPU execution is **temporarily disabled / unstable** in the current OpenVINO GenAI release (`NPU compiler does not support platform 'AUTO_DETECT' for architecture 5010`). Please select **`GPU`** (Intel Arc), **`HETERO:GPU,CPU`**, or **`CPU`** as your target hardware device for all generation and chat workflows until upstream Intel compiler updates are delivered.
+> **Metadata Detection Notice**:
+> The automatic model metadata inspector scans local model configuration files (`config.json`, tokenizer configs, and OpenVINO IR `.xml` topologies). On some custom, newly converted, or non-standard checkpoints, the script **may detect incorrect metadata** (such as architecture flags, context limits, or precision). You can manually review and adjust parameters upon launch or adjust them via `/think` and configuration settings.
 
 > [!WARNING]
 > **Performance Notice (Web UI vs. CLI)**:
@@ -26,7 +34,7 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
 > **Intel Hardware Requirements**:
 > This application is specifically tailored for Intel hardware architectures:
 > - **GPU**: Requires **Intel Alchemist (1st Gen Arc / Xe-HPG) or newer** (including Battlemage B-series, Meteor Lake Xe-LPG, and Lunar Lake / Arrow Lake Xe2). Older graphics generations (Intel UHD, early Iris Xe) lack the required Matrix/DPAS instructions and will either run slowly or fail compilation.
-> - **NPU**: Integrated Intel Neural Processing Unit on Core Ultra Series 1 (Meteor Lake) and newer. Note: NPU is currently **temporarily disabled** due to upstream compiler driver errors.
+> - **NPU**: Integrated Intel Neural Processing Unit on Core Ultra Series 1 (Meteor Lake) and newer. Now supports LLM execution (`device: NPU`).
 > - **CPU**: x86_64 CPU with AVX2, AVX512, or AMX instructions.
 
 ---
@@ -40,14 +48,14 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
   - Enables models too large for single GPU VRAM to execute seamlessly without crashing.
 
 - **Mixture of Experts (MoE) Offloading to Disk**:
-  - Automatically identifies MoE architectures (e.g. `Gemma-4-26B-A4B`, `Qwen3-30B-A3B`) via metadata inspection (`enable_moe_block`, `num_experts`, `top_k_experts`).
+  - Automatically identifies MoE architectures via metadata inspection (`enable_moe_block`, `num_experts`, `top_k_experts`).
   - Configures the GPU plugin's native MoE offload properties (`OFFLOAD_RATIO` and `ENABLE_MMAP`).
-  - Allows 26B/30B MoE models to run locally even on 16 GB memory systems by keeping only active experts in VRAM and paging inactive expert weights on-demand from disk.
+  - Allows large MoE models to run locally even on memory-constrained systems by keeping only active experts in VRAM and paging inactive expert weights on-demand from disk.
   - Dynamic user control via CLI (`--moe-offload`, `--moe-ratio`) and chat command (`/moe <ratio%>`).
 
 - **Dual LLM & VLM Multimodal Support**:
   - Automatically identifies model architecture via metadata inspection (`model.safetensors.index.json`, `config.json`, or `.xml` topology).
-  - Dynamically activates `VLMPipeline` for multimodal vision models (e.g., Gemma-4-E4B) and `LLMPipeline` for text models (Llama, Qwen, Mistral, DeepSeek).
+  - Dynamically activates `VLMPipeline` for multimodal vision models and `LLMPipeline` for text models.
   - Multi-image tensor batching: send one or multiple image/PDF page tensors in a single chat turn.
 
 - **Visual PDF Processing (Native PDF-to-Image for Scanned Exams & Math)**:
@@ -82,7 +90,7 @@ A high-performance local AI inference suite and OpenAI-compatible serving backen
   - Continuous sampling of **CPU**, **RAM**, **GPU Compute**, **Intel Arc XMX / Neural Engine**, **GPU 3D Engine**, and **Dedicated / Shared VRAM**.
 
 - **Reasoning / Thinking Mode (`/think`)**:
-  - Native support for reasoning models (Gemma 4, DeepSeek, etc.).
+  - Native support for reasoning models.
   - Live toggle via CLI `/think on` / `/think off` or configuration parameter prompt.
 
 - **Persistent Markdown Chat History**:
@@ -147,6 +155,7 @@ my-ov-script/
 - **Python**: 3.10 – 3.14 (64-bit)
 - **Hardware**:
   - Intel Arc GPU (Alchemist or newer, e.g. Arc A-series, B-series B390/B580, Core Ultra Xe-LPG/Xe2)
+  - Intel NPU (Core Ultra Meteor Lake, Lunar Lake, Arrow Lake - supported for LLMs)
   - Intel CPU (x86_64 with AVX2/AVX512/AMX)
 - **Operating System**: Windows 10/11 or Linux
 
@@ -160,6 +169,19 @@ pip install -r requirements.txt
 
 # Option B: Install package globally in your environment (recommended)
 pip install -e .
+```
+
+### 📥 Downloading Compatible Models
+
+Pre-converted and verified OpenVINO IR models can be downloaded directly from the official Hugging Face collections:
+
+👉 **[OpenVINO Hugging Face Model Collections](https://huggingface.co/OpenVINO/collections)**
+
+To download models directly into your model directory (`D:\AI models\openvino-genai` by default):
+
+```bash
+# Download any compatible OpenVINO model from the collection using huggingface-cli
+huggingface-cli download OpenVINO/<model-id> --local-dir "D:\AI models\openvino-genai\<model-id>"
 ```
 
 ---
@@ -186,13 +208,14 @@ The interactive CLI will:
    - `[1] GPU` (Intel Arc GPU acceleration)
    - `[2] HETERO:GPU,CPU` (Pipeline Parallelism Preview: stages split between GPU and CPU)
    - `[3] CPU` (Reference baseline)
-5. If an MoE model is selected (e.g. `Gemma-4-26B-A4B`), prompts to configure MoE expert offload to disk (e.g. 50%).
+   - `[4] NPU` (Intel Neural Processing Unit for LLMs)
+5. If an MoE model is selected, prompts to configure MoE expert offload to disk (e.g. 50%).
 
 ---
 
 ### 2. Processing Images and PDFs Visually (VLMs)
 
-When running a vision-language model like **`gemma-4-E4B-it-int4-ov`**, you can pass images (`.jpg`, `.png`, `.webp`, `.bmp`) or visual PDF pages directly.
+When running a vision-language model (VLM), you can pass images (`.jpg`, `.png`, `.webp`, `.bmp`) or visual PDF pages directly.
 
 #### Using PDF files with `/image`:
 PDFs are automatically rendered into crisp image tensors via Chromium's PDFium engine (`pypdfium2`):
@@ -238,6 +261,7 @@ ovchat serve --hetero --port 8000
 # Force specific device target:
 ovchat serve --device HETERO:GPU,CPU
 ovchat serve --device GPU
+ovchat serve --device NPU
 ovchat serve --device CPU
 
 # Configure MoE offloading ratio (e.g. 50% expert weights offloaded to disk):
@@ -253,7 +277,7 @@ ovchat stop                      # Or: python kill_server.py
 
 - **Load Parameter Confirmation**: When launched interactively, the server displays current parameters (Device, Pipeline Parallelism Policy, Context Length, Max Tokens, Temperature, Top-P, Reasoning, MoE Offloading) and lets you adjust them before startup.
 - **OpenAI API Base URL**: `http://127.0.0.1:8000/v1`
-- **Models List Endpoint**: `http://127.0.0.1:8000/v1/models` (exposes default, `(GPU)`, `(HETERO)`, and `(CPU)` entries for direct selection in Open WebUI)
+- **Models List Endpoint**: `http://127.0.0.1:8000/v1/models` (exposes default, `(GPU)`, `(HETERO)`, `(NPU)`, and `(CPU)` entries for direct selection in Open WebUI)
 - **Chat Completions**: `http://127.0.0.1:8000/v1/chat/completions`
 - **To stop the server**: Press `q` or `k` in console, type `quit`, run `ovchat stop`, or run `python kill_server.py`.
 
@@ -282,9 +306,7 @@ docker run -d -p 3000:8080 -e OPENAI_API_BASE_URL=http://host.docker.internal:80
    - If running inside Docker: `http://host.docker.internal:8000/v1`
 4. Set **API Key**: `openvino` (or any string).
 5. Click **Verify / Save Connection**.
-6. Open WebUI will instantly pull your local models:
-   - Select `Gemma-4-E4B (GPU)` for high-speed Arc GPU acceleration.
-   - Select `Gemma-4-26B-A4B (HETERO)` for multi-device pipeline parallel execution!
+6. Open WebUI will automatically discover and list your local models with their target execution device tags (e.g. `(GPU)`, `(HETERO)`, `(NPU)`, `(CPU)`).
 
 ---
 

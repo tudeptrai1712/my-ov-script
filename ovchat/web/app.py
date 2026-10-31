@@ -233,6 +233,15 @@ def create_app() -> FastAPI:
                 "parent": None,
             })
             model_objects.append({
+                "id": f"{m.name} (NPU)",
+                "object": "model",
+                "created": now_ts,
+                "owned_by": "openvino",
+                "permission": [],
+                "root": m.name,
+                "parent": None,
+            })
+            model_objects.append({
                 "id": f"{m.name} (CPU)",
                 "object": "model",
                 "created": now_ts,
@@ -301,10 +310,13 @@ def create_app() -> FastAPI:
             (":HETERO", "HETERO:GPU,CPU"),
             ("/hetero", "HETERO:GPU,CPU"),
             (" (GPU)", "GPU"),
+            (" (NPU)", "NPU"),
             (" (CPU)", "CPU"),
             (":GPU", "GPU"),
+            (":NPU", "NPU"),
             (":CPU", "CPU"),
             ("/gpu", "GPU"),
+            ("/npu", "NPU"),
             ("/cpu", "CPU"),
         ]:
             if clean_model_name.endswith(suffix):
