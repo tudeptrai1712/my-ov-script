@@ -475,72 +475,8 @@ def get_devices(metadata: Optional[ModelMetadata] = None) -> List[str]:
 
 def choose_device(metadata: Optional[ModelMetadata] = None) -> Optional[str]:
     """
-    Interactively prompts the user to select an OpenVINO execution device.
-    Displays detailed hardware specs next to each compatible device.
-    Includes Heterogeneous Pipeline Parallelism (GPU + CPU) and Intel Arc GPU acceleration.
+    Backward-compatibility alias.
+    Directs to ovchat.prompts.choose_device.
     """
-    specs = get_hardware_specs()
-    compatible_devices = get_devices(metadata)
-
-    if not compatible_devices:
-        print(
-            f"{UI.RED}No compatible OpenVINO devices found for {metadata.name if metadata else 'model'}.{UI.RESET}"
-        )
-        input("\nPress Enter...")
-        return None
-
-    # Priority sorting: GPU -> HETERO -> CPU -> NPU
-    def dev_priority(d: str) -> int:
-        u = d.upper()
-        if u == "GPU" or u.startswith("GPU."):
-            return 0
-        if u.startswith("HETERO"):
-            return 1
-        if u.startswith("CPU"):
-            return 2
-        return 99
-
-    compatible_devices.sort(key=dev_priority)
-
-    print()
-    if metadata is not None:
-        moe_note = f" [{metadata.moe_summary}]" if metadata.is_moe else ""
-        print(f"{UI.BOLD}Execution devices for {metadata.name}{moe_note}:{UI.RESET}")
-    else:
-        print(f"{UI.BOLD}Available OpenVINO execution devices:{UI.RESET}")
-
-    for i, device in enumerate(compatible_devices, start=1):
-        dev_upper = device.upper()
-        detail = ""
-        if dev_upper.startswith("HETERO"):
-            detail = f" (Pipeline Parallelism Preview: stages split across {device.split(':', 1)[-1]})"
-        elif dev_upper.startswith("GPU") and specs.gpus:
-            g = specs.gpus[0]
-            eu_s = f", {g.execution_units} EUs" if g.execution_units else ""
-            moe_hint = " - MoE Disk Offload enabled" if metadata and metadata.is_moe else ""
-            detail = f" ({g.name} - {human_bytes(g.total_memory)} memory{eu_s}{moe_hint})"
-        elif dev_upper.startswith("CPU"):
-            detail = f" ({specs.cpu_name} - {specs.cpu_cores_physical}C/{specs.cpu_cores_logical}T)"
-        elif dev_upper.startswith("NPU") and specs.npus:
-            n = specs.npus[0]
-            arch_s = f" - Arch {n.architecture}" if n.architecture else ""
-            detail = f" ({n.name}{arch_s})"
-
-        print(f"  {i}. {device}{UI.DIM}{detail}{UI.RESET}")
-
-    print()
-
-    while True:
-        value = input(f"{UI.CYAN}Select device [1]: {UI.RESET}").strip()
-
-        if not value:
-            return compatible_devices[0]
-
-        try:
-            index = int(value) - 1
-            if 0 <= index < len(compatible_devices):
-                return compatible_devices[index]
-        except ValueError:
-            pass
-
-        print(f"{UI.YELLOW}Invalid selection.{UI.RESET}")
+    from ..prompts import choose_device as _choose_device
+    return _choose_device(metadata)

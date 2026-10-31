@@ -19,146 +19,19 @@ from .config import (
     DEFAULT_MOE_OFFLOAD_RATIO,
     MODEL_ROOT,
 )
-from .hardware import choose_device, print_hardware_specs, render_hardware_and_models
+from .hardware import print_hardware_specs, render_hardware_and_models
 from .metadata import read_model_metadata
-from .models import choose_model, find_models
+from .models import find_models
+from .process import find_pids_on_port, kill_server_on_port
+from .prompts import (
+    choose_boolean,
+    choose_device,
+    choose_integer,
+    choose_model,
+    prompt_change_parameters,
+)
 from .ui import UI, clear_screen
 from .verifier import print_dependency_status, verify_dependencies
-
-
-# ============================================================
-# INTERACTIVE PROMPT HELPERS
-# ============================================================
-
-def choose_integer(
-    label: str,
-    default: int,
-    minimum: int = 1,
-    maximum: Optional[int] = None,
-) -> int:
-    """Interactively prompts for an integer value with validation against min and optional max."""
-    while True:
-        value = input(f"{UI.CYAN}{label} [{default}]: {UI.RESET}").strip()
-
-        if not value:
-            return default
-
-        try:
-            number = int(value)
-            if number < minimum:
-                print(f"{UI.YELLOW}Enter an integer >= {minimum}.{UI.RESET}")
-                continue
-            if maximum is not None and number > maximum:
-                print(f"{UI.YELLOW}Enter an integer <= {maximum:,}.{UI.RESET}")
-                continue
-            return number
-        except ValueError:
-            pass
-
-        print(f"{UI.YELLOW}Invalid number.{UI.RESET}")
-
-
-def choose_boolean(label: str, default: bool = False) -> bool:
-    """Interactively prompts for a boolean yes/no choice."""
-    prompt_suffix = "[Y/n]" if default else "[y/N]"
-    while True:
-        value = input(f"{UI.CYAN}{label} {prompt_suffix}: {UI.RESET}").strip().lower()
-
-        if not value:
-            return default
-
-        if value in ("y", "yes", "true", "1", "on"):
-            return True
-
-        if value in ("n", "no", "false", "0", "off"):
-            return False
-
-        print(f"{UI.YELLOW}Enter 'y' for yes or 'n' for no.{UI.RESET}")
-
-
-# ============================================================
-# SERVER MANAGEMENT HELPERS
-# ============================================================
-
-def find_pids_on_port(port: int) -> List[int]:
-    """Finds all process IDs listening on the given port."""
-    if os.name == "nt":
-        try:
-            res = subprocess.run(
-                f"netstat -ano | findstr :{port}",
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-            pids = set()
-            for line in res.stdout.splitlines():
-                parts = line.strip().split()
-                if len(parts) >= 4 and parts[1].endswith(f":{port}"):
-                    last_col = parts[-1]
-                    if last_col.isdigit() and int(last_col) > 0:
-                        pids.add(int(last_col))
-            if pids:
-                return list(pids)
-        except Exception:
-            pass
-
-        cmd = (
-            f"Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue | "
-            f"Select-Object -ExpandProperty OwningProcess"
-        )
-        try:
-            res = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", cmd],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            pids = [
-                int(p.strip())
-                for p in res.stdout.splitlines()
-                if p.strip().isdigit() and int(p.strip()) > 0
-            ]
-            return list(set(pids))
-        except Exception:
-            return []
-    else:
-        try:
-            res = subprocess.run(
-                ["lsof", "-t", f"-i:{port}"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return [int(p) for p in res.stdout.split() if p.isdigit()]
-        except Exception:
-            return []
-
-
-def kill_server_on_port(port: int = 8000) -> bool:
-    """Finds and terminates any process listening on the specified port."""
-    pids = find_pids_on_port(port)
-    if not pids:
-        return False
-
-    killed_any = False
-    for pid in pids:
-        if pid == os.getpid():
-            continue
-        try:
-            print(f"[API Server] Killing process PID {pid} listening on port {port}...")
-            if os.name == "nt":
-                subprocess.run(
-                    ["taskkill", "/F", "/PID", str(pid)],
-                    capture_output=True,
-                )
-            else:
-                os.kill(pid, signal.SIGTERM)
-            killed_any = True
-        except Exception as e:
-            print(f"[API Server] Warning: Could not terminate PID {pid}: {e}")
-
-    return killed_any
 
 
 def console_listener(server) -> None:
@@ -175,114 +48,6 @@ def console_listener(server) -> None:
                 break
         except Exception:
             break
-
-
-# ============================================================
-# INTERACTIVE PARAMETER CONFIGURATION
-# ============================================================
-
-def prompt_change_parameters() -> None:
-    """Interactively prompts user to inspect or modify model load parameters before server launch."""
-    from .settings import load_settings, save_settings
-
-    settings = load_settings()
-
-    dev = settings.get("selected_device", "GPU")
-    ctx = settings.get("context_length", 32768)
-    max_tok = settings.get("max_new_tokens", 8192)
-    temp = settings.get("temperature", 0.7)
-    top_p = settings.get("top_p", 0.95)
-    reasoning = settings.get("enable_reasoning", False)
-    moe_offload = settings.get("enable_moe_offload", True)
-    moe_ratio = settings.get("moe_offload_ratio", 50)
-    policy = settings.get("model_distribution_policy", "PIPELINE_PARALLEL")
-
-    try:
-        print()
-        print_hardware_specs()
-    except Exception:
-        pass
-
-    print("\n" + "=" * 70)
-    print("  Active Server Model Load Parameters:")
-    print(f"  [1] Target Device       : {dev}")
-    if dev.upper().startswith("HETERO"):
-        print(f"      Distribution Policy : {policy} (Pipeline Parallelism Preview)")
-    print(f"  [2] Context Length      : {ctx}")
-    print(f"  [3] Max Output Tokens   : {max_tok}")
-    print(f"  [4] Temperature         : {temp}")
-    print(f"  [5] Top-P               : {top_p}")
-    print(f"  [6] Reasoning / Thinking: {'Enabled' if reasoning else 'Disabled'}")
-    print(f"  [7] MoE Disk Offload    : {'Enabled (' + str(moe_ratio) + '% to disk)' if moe_offload else 'Disabled'}")
-    print("=" * 70)
-
-    try:
-        choice = input("\nDo you want to change any load parameters before launching? (y/N): ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return
-
-    if choice == "y":
-        print("\n--- Change Parameters (Press Enter on any setting to keep current value) ---")
-        print(
-            f"1. Target Device [1=GPU, 2=HETERO:GPU,CPU (Pipeline Parallelism), 3=CPU, 4=AUTO] (Current: {dev}): ",
-            end="",
-            flush=True,
-        )
-        try:
-            dev_in = input().strip()
-            if dev_in == "1":
-                settings["selected_device"] = "GPU"
-            elif dev_in == "2":
-                settings["selected_device"] = "HETERO:GPU,CPU"
-            elif dev_in == "3":
-                settings["selected_device"] = "CPU"
-            elif dev_in == "4":
-                settings["selected_device"] = "AUTO"
-            elif dev_in:
-                settings["selected_device"] = dev_in
-
-            ctx_in = input(f"2. Context Length (Current: {ctx}): ").strip()
-            if ctx_in.isdigit() and int(ctx_in) > 0:
-                settings["context_length"] = int(ctx_in)
-
-            max_in = input(f"3. Max Output Tokens (Current: {max_tok}): ").strip()
-            if max_in.isdigit() and int(max_in) > 0:
-                settings["max_new_tokens"] = int(max_in)
-
-            temp_in = input(f"4. Temperature (Current: {temp}): ").strip()
-            if temp_in:
-                try:
-                    settings["temperature"] = float(temp_in)
-                except ValueError:
-                    pass
-
-            top_p_in = input(f"5. Top-P (Current: {top_p}): ").strip()
-            if top_p_in:
-                try:
-                    settings["top_p"] = float(top_p_in)
-                except ValueError:
-                    pass
-
-            reas_in = input(f"6. Enable Reasoning/Thinking [y/n] (Current: {'y' if reasoning else 'n'}): ").strip().lower()
-            if reas_in == "y":
-                settings["enable_reasoning"] = True
-            elif reas_in == "n":
-                settings["enable_reasoning"] = False
-
-            moe_in = input(f"7. Enable MoE Offload to Disk [y/n] (Current: {'y' if moe_offload else 'n'}): ").strip().lower()
-            if moe_in == "y":
-                settings["enable_moe_offload"] = True
-            elif moe_in == "n":
-                settings["enable_moe_offload"] = False
-
-            moe_ratio_in = input(f"8. MoE Offload Ratio % (1-99) (Current: {moe_ratio}): ").strip()
-            if moe_ratio_in.isdigit() and 1 <= int(moe_ratio_in) <= 99:
-                settings["moe_offload_ratio"] = int(moe_ratio_in)
-
-            save_settings(settings)
-            print("\n[OK] Configuration updated and saved to user_config.json!\n")
-        except (EOFError, KeyboardInterrupt):
-            print("\nParameter change skipped.")
 
 
 # ============================================================
@@ -561,15 +326,10 @@ def entrypoint(argv: Optional[List[str]] = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
 
-    # 1. Dependency verification
+    # 1. Quick diagnostic and help flags (no auto-install side-effects)
     if any(k in argv for k in ("--deps", "--check-deps", "--status", "check")):
         check_command()
         return
-
-    ok, missing = verify_dependencies(auto_install=True)
-    if not ok:
-        print(f"\n[Dependency Verifier] Could not resolve: {missing}. Please install manually.\n")
-        sys.exit(1)
 
     # 2. Legacy flag translation
     if any(k in argv for k in ("--kill", "--stop", "--kill-server", "--stop-server", "--kill-web")):
@@ -618,7 +378,28 @@ def entrypoint(argv: Optional[List[str]] = None) -> None:
     # subcommand: models
     subparsers.add_parser("models", help="List local OpenVINO models with sizes and hardware fit")
 
+    # If help requested, show immediately
+    if any(k in argv for k in ("-h", "--help")):
+        parser.print_help()
+        return
+
     args, remaining = parser.parse_known_args(argv)
+
+    if args.subcommand == "stop":
+        stop_command(port=args.port)
+        return
+    elif args.subcommand == "check":
+        check_command()
+        return
+    elif args.subcommand == "models":
+        models_command()
+        return
+
+    # Verify dependencies before launching chat or serve
+    ok, missing = verify_dependencies(auto_install=True)
+    if not ok:
+        print(f"\n[Dependency Verifier] Could not resolve: {missing}. Please install manually.\n")
+        sys.exit(1)
 
     if args.subcommand == "serve":
         target_device = args.device

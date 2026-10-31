@@ -1,13 +1,12 @@
 """
 OpenVINO GenAI - OpenAI-Compatible API Server.
 High-performance backend for Open WebUI and standard OpenAI clients.
-Supports streaming chat completions, multimodal vision inputs, dynamic GPU/CPU/HETERO model loading,
-Heterogeneous Pipeline Parallelism, and Mixture of Experts (MoE) offloading to disk.
+Powered by the unified InferenceEngine, supporting streaming completions,
+multimodal vision, Heterogeneous Pipeline Parallelism, and MoE offloading.
 """
 
 import asyncio
 import base64
-import gc
 import io
 import json
 import os
@@ -20,7 +19,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import openvino as ov
-import openvino_genai as ov_genai
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -35,6 +33,7 @@ from ..config import (
     DEFAULT_MOE_OFFLOAD_RATIO,
     MODEL_ROOT,
 )
+from ..engine import InferenceEngine
 from ..hardware.monitor import powershell_gpu_memory
 from ..metadata import check_device_compatibility, read_model_metadata
 from ..models import find_models, model_size
@@ -43,48 +42,13 @@ from ..ui import human_bytes
 
 
 # ============================================================
-# STATE MANAGEMENT
+# UNIFIED ENGINE INSTANCE
 # ============================================================
 
-class ModelSession:
-    """Encapsulates the loaded OpenVINO pipeline and its active parameters."""
+engine = InferenceEngine()
 
-    def __init__(self):
-        self.pipe: Optional[Any] = None
-        self.tokenizer: Optional[Any] = None
-        self.generation_config: Optional[Any] = None
-        self.metadata: Optional[Any] = None
-        self.model_name: str = ""
-        self.model_path: Optional[Path] = None
-        self.device: str = "GPU"
-        self.context_length: int = DEFAULT_CONTEXT
-        self.max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS
-        self.reasoning_enabled: bool = DEFAULT_ENABLE_REASONING
-        self.temperature: float = 0.7
-        self.top_p: float = 0.95
-        self.load_time: float = 0.0
-        self.enable_moe_offload: bool = DEFAULT_ENABLE_MOE_OFFLOAD
-        self.moe_offload_ratio: int = DEFAULT_MOE_OFFLOAD_RATIO
-        self.model_distribution_policy: str = DEFAULT_MODEL_DISTRIBUTION_POLICY
-        self.applied_properties: Dict[str, Any] = {}
-        self.lock = threading.Lock()
-
-    def is_loaded(self) -> bool:
-        return self.pipe is not None
-
-    def unload(self) -> None:
-        with self.lock:
-            self.pipe = None
-            self.tokenizer = None
-            self.generation_config = None
-            self.metadata = None
-            self.model_name = ""
-            self.model_path = None
-            self.applied_properties = {}
-            gc.collect()
-
-
-session = ModelSession()
+# Backward-compatibility alias
+session = engine
 
 
 class LoadModelRequest(BaseModel):
@@ -112,7 +76,6 @@ async def load_model_internal(req: LoadModelRequest) -> Dict[str, Any]:
     meta = read_model_metadata(model_path)
     is_ok, reason = check_device_compatibility(req.device, meta)
     if not is_ok:
-        # Fallback to CPU if requested device is incompatible
         if req.device.upper() != "CPU":
             req.device = "CPU"
         else:
@@ -121,86 +84,48 @@ async def load_model_internal(req: LoadModelRequest) -> Dict[str, Any]:
                 detail=f"Device '{req.device}' cannot run this model: {reason}",
             )
 
-    def _do_load():
-        session.unload()
-        with session.lock:
-            session.model_name = req.model_name
-            session.model_path = model_path
-            session.device = req.device
-            session.context_length = req.context_length or DEFAULT_CONTEXT
-            session.max_new_tokens = req.max_new_tokens or DEFAULT_MAX_NEW_TOKENS
-            session.metadata = meta
-            session.reasoning_enabled = bool(req.enable_reasoning and meta.supports_reasoning)
-            session.temperature = req.temperature if req.temperature is not None else 0.7
-            session.top_p = req.top_p if req.top_p is not None else 0.95
-
-            if req.enable_moe_offload is not None:
-                session.enable_moe_offload = req.enable_moe_offload
-            else:
-                session.enable_moe_offload = settings.get("enable_moe_offload", DEFAULT_ENABLE_MOE_OFFLOAD)
-
-            if req.moe_offload_ratio is not None:
-                session.moe_offload_ratio = req.moe_offload_ratio
-            else:
-                session.moe_offload_ratio = settings.get("moe_offload_ratio", DEFAULT_MOE_OFFLOAD_RATIO)
-
-            if req.model_distribution_policy:
-                session.model_distribution_policy = req.model_distribution_policy
-            else:
-                session.model_distribution_policy = settings.get("model_distribution_policy", DEFAULT_MODEL_DISTRIBUTION_POLICY)
-
-            # Build OpenVINO properties map
-            properties: Dict[str, Any] = {}
-
-            # Heterogeneous Pipeline Parallelism
-            if req.device.upper().startswith("HETERO"):
-                properties["MODEL_DISTRIBUTION_POLICY"] = session.model_distribution_policy
-
-            # MoE Offload to disk (GPU / HETERO)
-            if meta.is_moe and session.enable_moe_offload:
-                if "GPU" in req.device.upper():
-                    properties["OFFLOAD_RATIO"] = int(session.moe_offload_ratio)
-                    properties["ENABLE_MMAP"] = "YES"
-
-            session.applied_properties = dict(properties)
-
-            t0 = time.perf_counter()
-            pipeline_cls = ov_genai.VLMPipeline if meta.is_vlm else ov_genai.LLMPipeline
-            try:
-                if properties:
-                    session.pipe = pipeline_cls(str(model_path), req.device, **properties)
-                else:
-                    session.pipe = pipeline_cls(str(model_path), req.device)
-            except TypeError:
-                try:
-                    session.pipe = pipeline_cls(str(model_path), req.device, properties)
-                except Exception:
-                    session.pipe = pipeline_cls(str(model_path), req.device)
-
-            session.load_time = time.perf_counter() - t0
-
-            session.tokenizer = session.pipe.get_tokenizer()
-            session.generation_config = session.pipe.get_generation_config()
-            session.generation_config.max_new_tokens = session.max_new_tokens
-            if hasattr(session.generation_config, "temperature"):
-                session.generation_config.temperature = session.temperature
-            if hasattr(session.generation_config, "top_p"):
-                session.generation_config.top_p = session.top_p
+    moe_offload = (
+        req.enable_moe_offload
+        if req.enable_moe_offload is not None
+        else settings.get("enable_moe_offload", DEFAULT_ENABLE_MOE_OFFLOAD)
+    )
+    moe_ratio = (
+        req.moe_offload_ratio
+        if req.moe_offload_ratio is not None
+        else settings.get("moe_offload_ratio", DEFAULT_MOE_OFFLOAD_RATIO)
+    )
+    policy = (
+        req.model_distribution_policy
+        if req.model_distribution_policy
+        else settings.get("model_distribution_policy", DEFAULT_MODEL_DISTRIBUTION_POLICY)
+    )
 
     try:
-        await asyncio.to_thread(_do_load)
+        await asyncio.to_thread(
+            engine.load_model,
+            model_path=model_path,
+            device=req.device,
+            context_length=req.context_length or DEFAULT_CONTEXT,
+            max_new_tokens=req.max_new_tokens or DEFAULT_MAX_NEW_TOKENS,
+            temperature=req.temperature if req.temperature is not None else 0.7,
+            top_p=req.top_p if req.top_p is not None else 0.95,
+            enable_reasoning=req.enable_reasoning,
+            enable_moe_offload=moe_offload,
+            moe_offload_ratio=moe_ratio,
+            model_distribution_policy=policy,
+        )
     except Exception as e:
-        session.unload()
+        engine.unload()
         raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
 
     return {
         "status": "loaded",
-        "model_name": session.model_name,
-        "device": session.device,
+        "model_name": engine.model_name,
+        "device": engine.device,
         "display_type": meta.display_type,
         "is_moe": meta.is_moe,
         "moe_summary": meta.moe_summary,
-        "load_time_seconds": round(session.load_time, 2),
+        "load_time_seconds": round(engine.load_time, 2),
     }
 
 
@@ -225,8 +150,8 @@ def create_app() -> FastAPI:
             "status": "online",
             "service": "OpenVINO GenAI - OpenAI-Compatible API Server",
             "version": "0.2.0",
-            "active_model": session.model_name or None,
-            "active_device": session.device if session.is_loaded() else None,
+            "active_model": engine.model_name or None,
+            "active_device": engine.device if engine.is_loaded else None,
             "hetero_support": "Pipeline Parallelism Preview (HETERO:GPU,CPU)",
             "moe_offloading": "Mixture of Experts disk offloading (OFFLOAD_RATIO)",
             "endpoints": {
@@ -241,21 +166,29 @@ def create_app() -> FastAPI:
         current_mem = powershell_gpu_memory()
         return {
             "status": "healthy",
-            "loaded": session.is_loaded(),
-            "model_name": session.model_name,
-            "device": session.device,
-            "display_type": session.metadata.display_type if session.metadata else "",
-            "precision": session.metadata.precision.upper() if session.metadata else "",
-            "is_moe": session.metadata.is_moe if session.metadata else False,
-            "moe_summary": session.metadata.moe_summary if session.metadata else "",
-            "moe_offload_ratio": session.moe_offload_ratio if (session.is_loaded() and session.metadata and session.metadata.is_moe) else None,
-            "model_distribution_policy": session.model_distribution_policy if (session.is_loaded() and session.device.upper().startswith("HETERO")) else None,
+            "loaded": engine.is_loaded,
+            "model_name": engine.model_name,
+            "device": engine.device,
+            "display_type": engine.metadata.display_type if engine.metadata else "",
+            "precision": engine.metadata.precision.upper() if engine.metadata else "",
+            "is_moe": engine.metadata.is_moe if engine.metadata else False,
+            "moe_summary": engine.metadata.moe_summary if engine.metadata else "",
+            "moe_offload_ratio": (
+                engine.moe_offload_ratio
+                if (engine.is_loaded and engine.metadata and engine.metadata.is_moe)
+                else None
+            ),
+            "model_distribution_policy": (
+                engine.model_distribution_policy
+                if (engine.is_loaded and engine.device.upper().startswith("HETERO"))
+                else None
+            ),
             "gpu_memory_human": human_bytes(current_mem),
         }
 
     @app.post("/api/unload")
     async def unload_model():
-        session.unload()
+        engine.unload()
         return {"status": "unloaded"}
 
     # ========================================================
@@ -272,7 +205,6 @@ def create_app() -> FastAPI:
         now_ts = int(time.time())
         model_objects = []
         for m in models:
-            # 1. Base model entry (uses default configured device)
             model_objects.append({
                 "id": m.name,
                 "object": "model",
@@ -282,7 +214,6 @@ def create_app() -> FastAPI:
                 "root": m.name,
                 "parent": None,
             })
-            # 2. Explicit GPU target entry
             model_objects.append({
                 "id": f"{m.name} (GPU)",
                 "object": "model",
@@ -292,7 +223,6 @@ def create_app() -> FastAPI:
                 "root": m.name,
                 "parent": None,
             })
-            # 3. Explicit HETERO target entry (Pipeline Parallelism Preview)
             model_objects.append({
                 "id": f"{m.name} (HETERO)",
                 "object": "model",
@@ -302,7 +232,6 @@ def create_app() -> FastAPI:
                 "root": m.name,
                 "parent": None,
             })
-            # 4. Explicit CPU target entry
             model_objects.append({
                 "id": f"{m.name} (CPU)",
                 "object": "model",
@@ -391,7 +320,7 @@ def create_app() -> FastAPI:
 
         if clean_model_name and clean_model_name in available_models:
             # Auto-load or switch model/device if needed
-            if not session.is_loaded() or session.model_name != clean_model_name or session.device != target_dev:
+            if not engine.is_loaded or engine.model_name != clean_model_name or engine.device != target_dev:
                 await load_model_internal(LoadModelRequest(
                     model_name=clean_model_name,
                     device=target_dev,
@@ -400,7 +329,7 @@ def create_app() -> FastAPI:
                     max_new_tokens=max_tokens,
                 ))
 
-        if not session.is_loaded():
+        if not engine.is_loaded:
             raise HTTPException(status_code=400, detail="No model loaded and could not resolve model.")
 
         # Process messages and multimodal images
@@ -421,7 +350,7 @@ def create_app() -> FastAPI:
                             text_parts.append(part.get("text", ""))
                         elif part.get("type") == "image_url":
                             img_url = part.get("image_url", {}).get("url", "")
-                            if img_url and session.metadata and session.metadata.is_vlm:
+                            if img_url and engine.metadata and engine.metadata.is_vlm:
                                 import numpy as np
                                 from PIL import Image
                                 try:
@@ -439,10 +368,6 @@ def create_app() -> FastAPI:
             combined_text = "\n".join(text_parts).strip()
             parsed_history.append({"role": role, "content": combined_text})
 
-        chat_hist = ov_genai.ChatHistory()
-        for m in parsed_history:
-            chat_hist.append({"role": m["role"], "content": m["content"]})
-
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         created_ts = int(time.time())
 
@@ -455,19 +380,14 @@ def create_app() -> FastAPI:
 
             def worker():
                 try:
-                    gen_cfg = session.pipe.get_generation_config()
-                    if max_tokens:
-                        gen_cfg.max_new_tokens = max_tokens
-                    if hasattr(gen_cfg, "temperature"):
-                        gen_cfg.temperature = temperature
-                    if hasattr(gen_cfg, "top_p"):
-                        gen_cfg.top_p = top_p
-
-                    extra_ctx = {"enable_thinking": session.reasoning_enabled}
-                    if session.metadata and session.metadata.is_vlm:
-                        session.pipe.generate(chat_hist, images=image_tensors, generation_config=gen_cfg, streamer=streamer_callback)
-                    else:
-                        session.pipe.generate(chat_hist, generation_config=gen_cfg, streamer=streamer_callback, extra_context=extra_ctx)
+                    engine.generate_chat(
+                        messages=parsed_history,
+                        images=image_tensors,
+                        streaming_callback=streamer_callback,
+                        max_new_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                    )
                 except Exception as ex:
                     q.put(ex)
                 finally:
@@ -476,17 +396,16 @@ def create_app() -> FastAPI:
             threading.Thread(target=worker, daemon=True).start()
 
             async def event_generator():
-                # Initial role chunk
                 init_chunk = {
                     "id": completion_id,
                     "object": "chat.completion.chunk",
                     "created": created_ts,
-                    "model": session.model_name,
+                    "model": engine.model_name,
                     "choices": [{
                         "index": 0,
                         "delta": {"role": "assistant", "content": ""},
-                        "finish_reason": None
-                    }]
+                        "finish_reason": None,
+                    }],
                 }
                 yield f"data: {json.dumps(init_chunk)}\n\n"
 
@@ -498,17 +417,16 @@ def create_app() -> FastAPI:
                         continue
 
                     if item is None:
-                        # Final stop chunk
                         stop_chunk = {
                             "id": completion_id,
                             "object": "chat.completion.chunk",
                             "created": created_ts,
-                            "model": session.model_name,
+                            "model": engine.model_name,
                             "choices": [{
                                 "index": 0,
                                 "delta": {},
-                                "finish_reason": "stop"
-                            }]
+                                "finish_reason": "stop",
+                            }],
                         }
                         yield f"data: {json.dumps(stop_chunk)}\n\n"
                         yield "data: [DONE]\n\n"
@@ -518,12 +436,12 @@ def create_app() -> FastAPI:
                             "id": completion_id,
                             "object": "chat.completion.chunk",
                             "created": created_ts,
-                            "model": session.model_name,
+                            "model": engine.model_name,
                             "choices": [{
                                 "index": 0,
                                 "delta": {"content": f"\n[Error: {str(item)}]"},
-                                "finish_reason": "error"
-                            }]
+                                "finish_reason": "error",
+                            }],
                         }
                         yield f"data: {json.dumps(err_chunk)}\n\n"
                         yield "data: [DONE]\n\n"
@@ -533,12 +451,12 @@ def create_app() -> FastAPI:
                             "id": completion_id,
                             "object": "chat.completion.chunk",
                             "created": created_ts,
-                            "model": session.model_name,
+                            "model": engine.model_name,
                             "choices": [{
                                 "index": 0,
                                 "delta": {"content": item},
-                                "finish_reason": None
-                            }]
+                                "finish_reason": None,
+                            }],
                         }
                         yield f"data: {json.dumps(chunk_obj)}\n\n"
 
@@ -548,54 +466,37 @@ def create_app() -> FastAPI:
                 headers={
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no"
-                }
+                    "X-Accel-Buffering": "no",
+                },
             )
         else:
-            # Non-streaming call
-            collected_text = []
-            def collect_streamer(chunk: str) -> bool:
-                collected_text.append(chunk)
-                return False
-
-            def non_stream_worker():
-                gen_cfg = session.pipe.get_generation_config()
-                if max_tokens:
-                    gen_cfg.max_new_tokens = max_tokens
-                if hasattr(gen_cfg, "temperature"):
-                    gen_cfg.temperature = temperature
-                if hasattr(gen_cfg, "top_p"):
-                    gen_cfg.top_p = top_p
-                extra_ctx = {"enable_thinking": session.reasoning_enabled}
-                if session.metadata and session.metadata.is_vlm:
-                    session.pipe.generate(chat_hist, images=image_tensors, generation_config=gen_cfg, streamer=collect_streamer)
-                else:
-                    session.pipe.generate(chat_hist, generation_config=gen_cfg, streamer=collect_streamer, extra_context=extra_ctx)
-
-            await asyncio.to_thread(non_stream_worker)
-            full_reply = "".join(collected_text)
+            result = await asyncio.to_thread(
+                engine.generate_chat,
+                messages=parsed_history,
+                images=image_tensors,
+                max_new_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            )
 
             return {
                 "id": completion_id,
                 "object": "chat.completion",
                 "created": created_ts,
-                "model": session.model_name,
+                "model": engine.model_name,
                 "choices": [{
                     "index": 0,
                     "message": {
                         "role": "assistant",
-                        "content": full_reply
+                        "content": result.text,
                     },
-                    "finish_reason": "stop"
+                    "finish_reason": "stop",
                 }],
                 "usage": {
-                    "prompt_tokens": len(str(parsed_history)) // 4,
-                    "completion_tokens": len(full_reply) // 4,
-                    "total_tokens": (len(str(parsed_history)) + len(full_reply)) // 4
-                }
+                    "prompt_tokens": result.prompt_tokens,
+                    "completion_tokens": result.tokens_generated,
+                    "total_tokens": result.prompt_tokens + result.tokens_generated,
+                },
             }
 
     return app
-
-
-app = create_app()

@@ -146,10 +146,12 @@ class Chat:
         handle_info("", self.cmd_context)
 
     def toggle_reasoning(self, enable: Optional[bool] = None) -> bool:
-        from .commands.session import handle_think
-
-        arg = "" if enable is None else ("on" if enable else "off")
-        handle_think(arg, self.cmd_context)
+        if enable is None:
+            new_val = not self.engine.reasoning_enabled
+        else:
+            new_val = bool(enable)
+        self.engine.set_reasoning(new_val)
+        self.history_saver.reasoning_enabled = self.engine.reasoning_enabled
         return self.engine.reasoning_enabled
 
     def load_model(
@@ -161,7 +163,6 @@ class Chat:
     ) -> None:
         """Dynamically loads and switches active model within current session."""
         print(f"\n{UI.CYAN}Switching model to: {model_path.name} on {device}...{UI.RESET}")
-        self.engine.unload()
 
         meta = read_model_metadata(model_path)
         self.model_path = model_path
@@ -186,21 +187,19 @@ class Chat:
         loading.start()
 
         try:
-            self.engine = InferenceEngine(
+            self.load_time = self.engine.load_model(
                 model_path=self.model_path,
                 device=self.device,
                 context_length=self.context_length,
                 max_new_tokens=self.max_new_tokens,
                 temperature=self.temperature,
                 top_p=self.top_p,
-                enable_reasoning=self.reasoning_enabled,
-                metadata=self.metadata,
+                enable_reasoning=self.engine.reasoning_enabled,
                 enable_moe_offload=self.enable_moe_offload,
                 moe_offload_ratio=self.moe_offload_ratio,
                 model_distribution_policy=self.model_distribution_policy,
+                warmup=True,
             )
-            self.load_time = self.engine.load(warmup=True)
-            self.cmd_context.engine = self.engine
         finally:
             time.sleep(0.3)
             loading.stop()

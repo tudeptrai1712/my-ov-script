@@ -1,4 +1,5 @@
 import gc
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,25 +33,26 @@ class GenerationResult:
 
 def count_tokens(tokenizer: Any, text: str) -> int:
     """Counts token length of arbitrary text using the model tokenizer."""
+    if not tokenizer:
+        return max(1, len(text) // 4)
     try:
         encoded = tokenizer.encode(text)
         shape = encoded.input_ids.get_shape()
         return int(shape[1]) if len(shape) >= 2 else int(shape[0])
     except Exception:
-        # Fallback estimation if encoding fails: ~4 characters per token
         return max(1, len(text) // 4)
 
 
 class InferenceEngine:
     """
-    Pure OpenVINO GenAI runtime wrapper for dual LLM & VLM pipelines.
-    Decoupled from terminal presentation, input loops, and command parsing.
-    Supports Heterogeneous Pipeline Parallelism and MoE offloading to disk.
+    Unified OpenVINO GenAI runtime wrapper for dual LLM & VLM pipelines.
+    Single source of truth used by both terminal CLI and FastAPI OpenAI server.
+    Thread-safe, supporting Heterogeneous Pipeline Parallelism and MoE offloading.
     """
 
     def __init__(
         self,
-        model_path: Path,
+        model_path: Optional[Path] = None,
         device: str = "GPU",
         context_length: int = DEFAULT_CONTEXT,
         max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
@@ -62,24 +64,31 @@ class InferenceEngine:
         moe_offload_ratio: int = DEFAULT_MOE_OFFLOAD_RATIO,
         model_distribution_policy: str = DEFAULT_MODEL_DISTRIBUTION_POLICY,
     ):
-        self.model_path = Path(model_path)
-        self.device = device
-        self.context_length = context_length
-        self.max_new_tokens = max_new_tokens
-        self.temperature = temperature
-        self.top_p = top_p
-        self.metadata = metadata or read_model_metadata(self.model_path)
+        self.lock = threading.Lock()
+        self.model_path: Optional[Path] = Path(model_path) if model_path else None
+        self.device: str = device
+        self.context_length: int = context_length
+        self.max_new_tokens: int = max_new_tokens
+        self.temperature: float = temperature
+        self.top_p: float = top_p
+        self.enable_reasoning_default: bool = enable_reasoning
+        self.metadata: Optional[ModelMetadata] = metadata
+        if self.model_path and not self.metadata:
+            self.metadata = read_model_metadata(self.model_path)
 
-        self.reasoning_enabled = enable_reasoning and self.metadata.supports_reasoning
-        self.enable_moe_offload = enable_moe_offload
-        self.moe_offload_ratio = moe_offload_ratio
-        self.model_distribution_policy = model_distribution_policy
+        self.reasoning_enabled: bool = bool(
+            enable_reasoning and self.metadata and self.metadata.supports_reasoning
+        )
+        self.enable_moe_offload: bool = enable_moe_offload
+        self.moe_offload_ratio: int = moe_offload_ratio
+        self.model_distribution_policy: str = model_distribution_policy
         self.applied_properties: Dict[str, Any] = {}
 
         self.pipe: Optional[Any] = None
         self.tokenizer: Optional[Any] = None
         self.generation_config: Optional[Any] = None
 
+        # Interactive CLI session history
         self.chat_history = ov_genai.ChatHistory()
         self.history_messages: List[Dict[str, str]] = []
 
@@ -90,26 +99,82 @@ class InferenceEngine:
     def is_loaded(self) -> bool:
         return self.pipe is not None
 
+    @property
+    def model_name(self) -> str:
+        if self.metadata:
+            return self.metadata.name
+        if self.model_path:
+            return self.model_path.name
+        return ""
+
+    def load_model(
+        self,
+        model_path: Path,
+        device: str = "GPU",
+        context_length: Optional[int] = None,
+        max_new_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        enable_reasoning: Optional[bool] = None,
+        enable_moe_offload: Optional[bool] = None,
+        moe_offload_ratio: Optional[int] = None,
+        model_distribution_policy: Optional[str] = None,
+        warmup: bool = True,
+    ) -> float:
+        """Configures parameters and compiles the pipeline."""
+        with self.lock:
+            self.unload()
+            self.model_path = Path(model_path)
+            self.device = device
+            if context_length is not None:
+                self.context_length = context_length
+            if max_new_tokens is not None:
+                self.max_new_tokens = max_new_tokens
+            if temperature is not None:
+                self.temperature = temperature
+            if top_p is not None:
+                self.top_p = top_p
+            if enable_moe_offload is not None:
+                self.enable_moe_offload = enable_moe_offload
+            if moe_offload_ratio is not None:
+                self.moe_offload_ratio = moe_offload_ratio
+            if model_distribution_policy is not None:
+                self.model_distribution_policy = model_distribution_policy
+
+            self.metadata = read_model_metadata(self.model_path)
+            if enable_reasoning is not None:
+                self.reasoning_enabled = bool(enable_reasoning and self.metadata.supports_reasoning)
+            else:
+                self.reasoning_enabled = bool(
+                    self.enable_reasoning_default and self.metadata.supports_reasoning
+                )
+
+            return self._compile_pipeline(warmup=warmup)
+
     def load(self, warmup: bool = True) -> float:
-        """
-        Initializes the OpenVINO GenAI pipeline (VLMPipeline or LLMPipeline).
-        Configures Heterogeneous execution (Pipeline Parallelism) and MoE offload properties.
-        Returns total load time in seconds.
-        """
+        """Loads and compiles pipeline using current instance configuration."""
+        with self.lock:
+            return self._compile_pipeline(warmup=warmup)
+
+    def _compile_pipeline(self, warmup: bool = True) -> float:
+        """Internal compilation logic. Must be called under self.lock."""
+        if not self.model_path or not self.model_path.exists():
+            raise FileNotFoundError(f"Model path does not exist: {self.model_path}")
+
         start_time = time.perf_counter()
+        if not self.metadata:
+            self.metadata = read_model_metadata(self.model_path)
 
         pipeline_cls = ov_genai.VLMPipeline if self.metadata.is_vlm else ov_genai.LLMPipeline
 
-        # Build pipeline device configuration properties
+        # Device configuration properties
         properties: Dict[str, Any] = {}
 
-        # 1. Heterogeneous Execution with Pipeline Parallelism (Preview)
-        # Reference: https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/hetero-execution.html#pipeline-parallelism-preview
+        # 1. Heterogeneous Pipeline Parallelism
         if self.device.upper().startswith("HETERO"):
             properties["MODEL_DISTRIBUTION_POLICY"] = self.model_distribution_policy
 
-        # 2. Mixture of Experts (MoE) Offloading to Disk (OpenVINO 2026 GPU plugin)
-        # Reduces VRAM requirement for large MoE models through partial expert weight offloading
+        # 2. Mixture of Experts (MoE) Offloading to Disk
         if self.metadata.is_moe and self.enable_moe_offload:
             if "GPU" in self.device.upper():
                 properties["OFFLOAD_RATIO"] = int(self.moe_offload_ratio)
@@ -117,7 +182,6 @@ class InferenceEngine:
 
         self.applied_properties = dict(properties)
 
-        # Load pipeline on requested device with properties
         try:
             if properties:
                 self.pipe = pipeline_cls(str(self.model_path), self.device, **properties)
@@ -132,20 +196,20 @@ class InferenceEngine:
         self.tokenizer = self.pipe.get_tokenizer()
         self.generation_config = self.pipe.get_generation_config()
         self.generation_config.max_new_tokens = self.max_new_tokens
-        self.generation_config.temperature = self.temperature
-        self.generation_config.top_p = self.top_p
+        if hasattr(self.generation_config, "temperature"):
+            self.generation_config.temperature = self.temperature
+        if hasattr(self.generation_config, "top_p"):
+            self.generation_config.top_p = self.top_p
 
-        # Re-initialize history
+        # Reset interactive history
         self.chat_history = ov_genai.ChatHistory()
         self.history_messages = []
 
-        # Optional warmup to initialize OpenVINO runtime buffers
         if warmup:
             try:
                 warmup_cfg = self.pipe.get_generation_config()
                 warmup_cfg.max_new_tokens = 1
                 if self.metadata.is_vlm:
-                    # Warmup with dummy 1x1 image tensor
                     import numpy as np
                     dummy_img = ov.Tensor(np.zeros((64, 64, 3), dtype=np.uint8))
                     self.pipe.generate("hi", images=[dummy_img], generation_config=warmup_cfg)
@@ -158,11 +222,14 @@ class InferenceEngine:
         return self.load_time
 
     def unload(self) -> None:
-        """Ejects active model and frees VRAM and system memory."""
+        """Ejects active model and frees memory buffers."""
         self.pipe = None
         self.tokenizer = None
         self.generation_config = None
         self.pending_images = []
+        self.chat_history = ov_genai.ChatHistory()
+        self.history_messages = []
+        self.applied_properties = {}
         gc.collect()
 
     def rebuild_history(self) -> None:
@@ -175,7 +242,7 @@ class InferenceEngine:
             })
 
     def context_usage(self) -> int:
-        """Calculates current context token consumption."""
+        """Calculates current context token consumption for interactive session."""
         if not self.history_messages or not self.tokenizer:
             return 0
 
@@ -199,20 +266,19 @@ class InferenceEngine:
             required = used + self.max_new_tokens
             if required <= self.context_length:
                 break
-            # Remove oldest turn (user + assistant)
             del self.history_messages[:2]
             self.rebuild_history()
 
         return self.context_usage()
 
     def clear_history(self) -> None:
-        """Clears conversation context."""
+        """Clears interactive conversation context."""
         self.history_messages.clear()
         self.chat_history = ov_genai.ChatHistory()
 
     def set_reasoning(self, enable: bool) -> bool:
         """Enables or disables reasoning mode if supported by model."""
-        if not self.metadata.supports_reasoning:
+        if not self.metadata or not self.metadata.supports_reasoning:
             self.reasoning_enabled = False
             return False
         self.reasoning_enabled = bool(enable)
@@ -234,16 +300,14 @@ class InferenceEngine:
         streaming_callback: Optional[Callable[[str], bool]] = None,
     ) -> GenerationResult:
         """
-        Executes streaming inference for the given user prompt.
-        Accepts an optional streaming_callback(token_str) -> bool (return True to abort).
-        Returns GenerationResult containing generated text and performance metrics.
+        Executes streaming inference for the interactive CLI session.
+        Appends user prompt and assistant response to session history.
         """
         if self.pipe is None:
             raise RuntimeError("Cannot generate: No OpenVINO model is currently loaded.")
 
         prompt_tokens_est = count_tokens(self.tokenizer, prompt) if self.tokenizer else 0
 
-        # Append turn to history
         self.history_messages.append({"role": "user", "content": prompt})
         self.rebuild_history()
         self.trim_context()
@@ -256,12 +320,9 @@ class InferenceEngine:
             nonlocal ttft
             if ttft is None:
                 ttft = time.perf_counter() - gen_start
-
             generated_chunks.append(text)
             if streaming_callback:
-                should_abort = streaming_callback(text)
-                if should_abort:
-                    return True
+                return bool(streaming_callback(text))
             return False
 
         kwargs: Dict[str, Any] = {
@@ -270,25 +331,99 @@ class InferenceEngine:
             "extra_context": {"enable_thinking": self.reasoning_enabled},
         }
 
-        # Inject multimodal image tensors if VLM
-        if self.metadata.is_vlm and self.pending_images:
+        if self.metadata and self.metadata.is_vlm and self.pending_images:
             kwargs["images"] = self.pending_images
             self.pending_images = []
 
-        # Run inference
-        self.pipe.generate(self.chat_history, **kwargs)
+        with self.lock:
+            self.pipe.generate(self.chat_history, **kwargs)
 
         total_time = time.perf_counter() - gen_start
         full_text = "".join(generated_chunks)
 
-        # Count generated tokens
         tokens_gen = count_tokens(self.tokenizer, full_text) if self.tokenizer else max(1, len(full_text) // 4)
         tokens_per_sec = tokens_gen / total_time if total_time > 0 else 0.0
         ttft_val = ttft if ttft is not None else 0.0
 
-        # Save assistant response in internal history
         self.history_messages.append({"role": "assistant", "content": full_text})
         self.rebuild_history()
+
+        return GenerationResult(
+            text=full_text,
+            tokens_generated=tokens_gen,
+            ttft_sec=ttft_val,
+            total_time_sec=total_time,
+            tokens_per_second=tokens_per_sec,
+            prompt_tokens=prompt_tokens_est,
+        )
+
+    def generate_chat(
+        self,
+        messages: List[Dict[str, str]],
+        images: Optional[List[ov.Tensor]] = None,
+        streaming_callback: Optional[Callable[[str], bool]] = None,
+        max_new_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+    ) -> GenerationResult:
+        """
+        Executes inference for an arbitrary list of messages (e.g. OpenAI /v1/chat/completions).
+        Stateless with respect to the interactive CLI session. Thread-safe.
+        """
+        if self.pipe is None:
+            raise RuntimeError("Cannot generate: No OpenVINO model is currently loaded.")
+
+        chat_hist = ov_genai.ChatHistory()
+        for msg in messages:
+            chat_hist.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+
+        # Calculate prompt tokens
+        prompt_text = "\n".join(m.get("content", "") for m in messages)
+        prompt_tokens_est = count_tokens(self.tokenizer, prompt_text) if self.tokenizer else 0
+
+        # Clone and configure generation parameters
+        gen_cfg = self.pipe.get_generation_config()
+        if max_new_tokens:
+            gen_cfg.max_new_tokens = max_new_tokens
+        elif self.max_new_tokens:
+            gen_cfg.max_new_tokens = self.max_new_tokens
+
+        if temperature is not None and hasattr(gen_cfg, "temperature"):
+            gen_cfg.temperature = temperature
+        if top_p is not None and hasattr(gen_cfg, "top_p"):
+            gen_cfg.top_p = top_p
+
+        generated_chunks: List[str] = []
+        ttft: Optional[float] = None
+        gen_start = time.perf_counter()
+
+        def internal_streamer(text: str) -> bool:
+            nonlocal ttft
+            if ttft is None:
+                ttft = time.perf_counter() - gen_start
+            generated_chunks.append(text)
+            if streaming_callback:
+                return bool(streaming_callback(text))
+            return False
+
+        kwargs: Dict[str, Any] = {
+            "generation_config": gen_cfg,
+            "streamer": internal_streamer,
+            "extra_context": {"enable_thinking": self.reasoning_enabled},
+        }
+
+        if self.metadata and self.metadata.is_vlm and images:
+            kwargs["images"] = images
+
+        with self.lock:
+            self.pipe.generate(chat_hist, **kwargs)
+
+        total_time = time.perf_counter() - gen_start
+        full_text = "".join(generated_chunks)
+
+        tokens_gen = count_tokens(self.tokenizer, full_text) if self.tokenizer else max(1, len(full_text) // 4)
+        tokens_per_sec = tokens_gen / total_time if total_time > 0 else 0.0
+        ttft_val = ttft if ttft is not None else 0.0
 
         return GenerationResult(
             text=full_text,
