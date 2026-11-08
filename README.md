@@ -279,6 +279,7 @@ ovchat stop                      # Or: python kill_server.py
 - **OpenAI API Base URL**: `http://127.0.0.1:8000/v1`
 - **Models List Endpoint**: `http://127.0.0.1:8000/v1/models` (exposes default, `(GPU)`, `(HETERO)`, `(NPU)`, and `(CPU)` entries for direct selection in Open WebUI)
 - **Chat Completions**: `http://127.0.0.1:8000/v1/chat/completions`
+- **Responses API**: `http://127.0.0.1:8000/v1/responses` (Native support for `client.responses.create`, tool calling, and Agentic / RAG loops)
 - **To stop the server**: Press `q` or `k` in console, type `quit`, run `ovchat stop`, or run `python kill_server.py`.
 
 ---
