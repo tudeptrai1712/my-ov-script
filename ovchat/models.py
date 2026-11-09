@@ -1,12 +1,8 @@
-"""
-Model discovery and file inspections for OpenVINO IR models.
-Pure filesystem operations without terminal UI dependencies.
-"""
-
 from pathlib import Path
 from typing import List, Optional
 
 from .config import MODEL_ROOT
+from .ui import UI, human_bytes
 
 
 def find_models(model_root: Optional[Path] = None) -> List[Path]:
@@ -45,16 +41,39 @@ def model_size(model_path: Path) -> int:
 
 
 def choose_model(model_root: Optional[Path] = None) -> Optional[Path]:
-    """
-    Backward-compatibility alias.
-    Directs to ovchat.prompts.choose_model.
-    """
-    from .prompts import choose_model as _choose_model
-    return _choose_model(model_root)
+    """Interactively prompts the user to select an OpenVINO model."""
+    root = model_root or MODEL_ROOT
+    models = find_models(root)
 
+    if not models:
+        print(f"{UI.RED}No OpenVINO models found.{UI.RESET}\n")
+        print("Expected model directory:")
+        print(root)
+        print("\nEach model should contain .xml and .bin files.")
+        input("\nPress Enter...")
+        return None
 
-__all__ = [
-    "find_models",
-    "model_size",
-    "choose_model",
-]
+    print()
+    print(f"{UI.BOLD}{UI.CYAN}OpenVINO Models{UI.RESET}\n")
+
+    for i, model in enumerate(models, start=1):
+        size = model_size(model)
+        print(f"  {i}. {model.name} {UI.DIM}({human_bytes(size)}){UI.RESET}")
+
+    print()
+
+    while True:
+        value = input(f"{UI.CYAN}Select model [1]: {UI.RESET}").strip()
+
+        if not value:
+            return models[0]
+
+        try:
+            index = int(value) - 1
+            if 0 <= index < len(models):
+                return models[index]
+        except ValueError:
+            pass
+
+        print(f"{UI.YELLOW}Invalid selection.{UI.RESET}")
+

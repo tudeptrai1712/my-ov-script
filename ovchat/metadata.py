@@ -1,12 +1,9 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-try:
-    import openvino as ov
-except ImportError:
-    ov = None
+import openvino as ov
 
 from .models import model_size
 
@@ -24,29 +21,10 @@ class ModelMetadata:
     max_position_embeddings: Optional[int] = None
     supports_reasoning: bool = False
     weight_size_bytes: int = 0
-    is_moe: bool = False
-    num_experts: Optional[int] = None
-    top_k_experts: Optional[int] = None
-    moe_intermediate_size: Optional[int] = None
 
     @property
     def display_type(self) -> str:
-        base = "Vision-Language Model (VLM)" if self.is_vlm else "Language Model (LLM)"
-        if self.is_moe:
-            summary = self.moe_summary
-            return f"{base} [{summary}]" if summary else f"{base} [MoE]"
-        return base
-
-    @property
-    def moe_summary(self) -> str:
-        """Formatted MoE architecture summary."""
-        if not self.is_moe:
-            return ""
-        if self.num_experts and self.top_k_experts:
-            return f"MoE {self.top_k_experts}/{self.num_experts} active"
-        if self.num_experts:
-            return f"MoE {self.num_experts} experts"
-        return "MoE"
+        return "Vision-Language Model (VLM)" if self.is_vlm else "Language Model (LLM)"
 
 
 def read_model_metadata(model_path: Path) -> ModelMetadata:
@@ -102,9 +80,6 @@ def read_model_metadata(model_path: Path) -> ModelMetadata:
 
     # 4. Context length / max position embeddings
     text_config = config.get("text_config", {})
-    if not isinstance(text_config, dict):
-        text_config = {}
-
     max_position = (
         text_config.get("max_position_embeddings")
         or config.get("max_position_embeddings")
@@ -118,18 +93,7 @@ def read_model_metadata(model_path: Path) -> ModelMetadata:
             template_text = chat_template_path.read_text(encoding="utf-8")
             if any(
                 tag in template_text
-                for tag in (
-                    "enable_thinking",
-                    "reasoning_effort",
-                    "reasoning_content",
-                    "<|channel|>analysis",
-                    "<|channel>thought",
-                    "<think>",
-                    "<|think|>",
-                    "<thought>",
-                    "<|thought|>",
-                    "thought",
-                )
+                for tag in ("enable_thinking", "<|think|>", "<think>", "thought")
             ):
                 supports_reasoning = True
         except Exception:
@@ -139,49 +103,15 @@ def read_model_metadata(model_path: Path) -> ModelMetadata:
         try:
             with open(tokenizer_config_path, encoding="utf-8") as f:
                 tok_config = json.load(f)
-            tok_str = str(tok_config).lower()
-            if any(
-                k in tok_str
-                for k in ("think_token", "reasoning_effort", "reasoning_content", "thinking", "<|channel|>")
+            if (
+                "think_token" in tok_config.get("model_specific_special_tokens", {})
+                or "thinking" in str(tok_config.get("response_schema", ""))
             ):
                 supports_reasoning = True
         except Exception:
             pass
 
-    if not supports_reasoning:
-        name_lower = name.lower()
-        model_type_lower = str(model_type).lower()
-        arch_lower = str(architecture).lower()
-        if any(
-            k in model_type_lower or k in arch_lower or k in name_lower
-            for k in ("gpt_oss", "deepseek_r1", "qwq", "-r1", "reasoning")
-        ):
-            supports_reasoning = True
-
-    # 6. Mixture of Experts (MoE) detection
-    enable_moe = (
-        config.get("enable_moe_block")
-        or text_config.get("enable_moe_block")
-        or ("num_experts" in config and config.get("num_experts") is not None)
-        or ("num_experts" in text_config and text_config.get("num_experts") is not None)
-        or "moe" in str(architecture).lower()
-        or "moe" in str(model_type).lower()
-        or "-a4b" in name.lower()
-        or "-a3b" in name.lower()
-        or "-a1b" in name.lower()
-    )
-    num_experts = config.get("num_experts") or text_config.get("num_experts")
-    top_k_experts = (
-        config.get("top_k_experts")
-        or text_config.get("top_k_experts")
-        or config.get("num_experts_per_tok")
-        or text_config.get("num_experts_per_tok")
-    )
-    moe_intermediate_size = config.get("moe_intermediate_size") or text_config.get("moe_intermediate_size")
-
-    is_moe = bool(enable_moe or (num_experts and num_experts > 1))
-
-    # 7. Weight size
+    # 6. Weight size
     weight_size = model_size(model_path)
 
     return ModelMetadata(
@@ -194,10 +124,6 @@ def read_model_metadata(model_path: Path) -> ModelMetadata:
         max_position_embeddings=max_position,
         supports_reasoning=supports_reasoning,
         weight_size_bytes=weight_size,
-        is_moe=is_moe,
-        num_experts=int(num_experts) if num_experts else None,
-        top_k_experts=int(top_k_experts) if top_k_experts else None,
-        moe_intermediate_size=int(moe_intermediate_size) if moe_intermediate_size else None,
     )
 
 
@@ -211,10 +137,6 @@ def check_device_compatibility(
     Returns (is_compatible, reason_if_incompatible).
     """
     device_upper = device.upper()
-
-    # Heterogeneous execution: orchestrates across multiple devices (e.g. HETERO:GPU,CPU)
-    if device_upper.startswith("HETERO"):
-        return True, None
 
     # CPU is the reference baseline and always supported
     if device_upper.startswith("CPU"):
@@ -245,3 +167,4 @@ def check_device_compatibility(
         return True, None
 
     return True, None
+
