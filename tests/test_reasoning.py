@@ -41,6 +41,18 @@ class TestReasoningParser(unittest.TestCase):
         self.assertIsNone(thought)
         self.assertEqual(content, "The answer is 4.")
 
+    def test_gpt_oss_detokenized_bare_words_on(self):
+        raw = 'analysisThinking step 1.assistantfinalfour'
+        thought, content = split_reasoning_and_content(raw)
+        self.assertEqual(thought, "Thinking step 1.")
+        self.assertEqual(content, "four")
+
+    def test_gpt_oss_detokenized_bare_words_off(self):
+        raw = 'finalfour'
+        thought, content = split_reasoning_and_content(raw)
+        self.assertIsNone(thought)
+        self.assertEqual(content, "four")
+
     def test_gemma_4_reasoning_on(self):
         raw = (
             "<|channel>thought\n"
@@ -127,28 +139,27 @@ class TestEngineReasoningContext(unittest.TestCase):
     def test_extra_context_toggling(self):
         engine = InferenceEngine(enable_reasoning=False)
         ctx_disabled = engine._build_extra_context()
-        self.assertFalse(ctx_disabled["enable_thinking"])
-        self.assertEqual(ctx_disabled["reasoning_effort"], "none")
+        self.assertEqual(ctx_disabled["enable_thinking"], 0)
+        self.assertTrue(all(isinstance(v, int) for v in ctx_disabled.values()))
 
         engine.set_reasoning(True)
         ctx_enabled = engine._build_extra_context()
-        self.assertTrue(ctx_enabled["enable_thinking"])
-        self.assertEqual(ctx_enabled["reasoning_effort"], "medium")
+        self.assertEqual(ctx_enabled["enable_thinking"], 1)
+        self.assertTrue(all(isinstance(v, int) for v in ctx_enabled.values()))
 
         engine.set_reasoning(False)
         ctx_disabled2 = engine._build_extra_context()
-        self.assertFalse(ctx_disabled2["enable_thinking"])
-        self.assertEqual(ctx_disabled2["reasoning_effort"], "none")
+        self.assertEqual(ctx_disabled2["enable_thinking"], 0)
+        self.assertTrue(all(isinstance(v, int) for v in ctx_disabled2.values()))
 
     def test_extra_context_custom_effort(self):
         engine = InferenceEngine(enable_reasoning=True)
-        engine.set_reasoning(True, effort="high")
-        ctx = engine._build_extra_context()
-        self.assertEqual(ctx["reasoning_effort"], "high")
+        ctx_override_off = engine._build_extra_context({"reasoning_effort": "none"})
+        self.assertEqual(ctx_override_off["reasoning_effort"], 0)
 
-        # Per-call override
-        ctx_override = engine._build_extra_context({"reasoning_effort": "low"})
-        self.assertEqual(ctx_override["reasoning_effort"], "low")
+        ctx_override_on = engine._build_extra_context({"reasoning_effort": "high"})
+        self.assertEqual(ctx_override_on["reasoning_effort"], 1)
+        self.assertTrue(all(isinstance(v, int) for v in ctx_override_on.values()))
 
     def test_engine_generate_with_reasoning_stream(self):
         engine = InferenceEngine(enable_reasoning=True)

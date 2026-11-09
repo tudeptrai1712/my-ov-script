@@ -74,6 +74,7 @@ class StreamTokenParser:
         self.buffer: str = ""
         self.thought_chunks: List[str] = []
         self.content_chunks: List[str] = []
+        self._started: bool = False
 
     def feed(self, chunk: str) -> None:
         """Processes incoming streamed token chunk."""
@@ -100,16 +101,71 @@ class StreamTokenParser:
 
     def _process_buffer(self, eof: bool) -> None:
         while self.buffer:
-            # If buffer has no '<', everything up to end is normal text
+            # 1. Handle bare channel words at generation onset (from OpenVINO detokenizer)
+            if not self._started:
+                # If buffer starts with 'analysis'
+                if self.buffer.startswith("analysis"):
+                    self.buffer = self.buffer[len("analysis"):]
+                    self.mode = "thought"
+                    self._started = True
+                    continue
+                # If buffer starts with 'assistantfinal' or 'final'
+                elif self.buffer.startswith("assistantfinal"):
+                    self.buffer = self.buffer[len("assistantfinal"):]
+                    self.mode = "content"
+                    self._started = True
+                    continue
+                elif self.buffer.startswith("final"):
+                    self.buffer = self.buffer[len("final"):]
+                    self.mode = "content"
+                    self._started = True
+                    continue
+                elif any(w.startswith(self.buffer) for w in ("analysis", "assistantfinal", "final")):
+                    if not eof:
+                        break  # Wait for full prefix
+                    self._started = True
+                else:
+                    self._started = True
+
+            # 2. Check for transition to final channel while in thought mode
+            if self.mode == "thought":
+                # Check for bare assistantfinal or final transition
+                if self.buffer.startswith("assistantfinal"):
+                    self.buffer = self.buffer[len("assistantfinal"):]
+                    self.mode = "content"
+                    continue
+                elif self.buffer.startswith("<|channel|>final") or self.buffer.startswith("<channel|>"):
+                    pass  # Will be handled by ALL_TAGS matching below
+                elif any("assistantfinal".startswith(self.buffer) for _ in [0]):
+                    if not eof:
+                        break
+
+            # 3. Delimiter tag search
             first_lt = self.buffer.find("<")
             if first_lt == -1:
+                # Check if 'assistantfinal' exists in buffer while in thought mode
+                if self.mode == "thought" and "assistantfinal" in self.buffer:
+                    idx = self.buffer.find("assistantfinal")
+                    self._emit(self.buffer[:idx])
+                    self.buffer = self.buffer[idx + len("assistantfinal"):]
+                    self.mode = "content"
+                    continue
+
                 self._emit(self.buffer)
                 self.buffer = ""
                 break
 
             # If there is normal text before '<', emit it immediately
             if first_lt > 0:
-                self._emit(self.buffer[:first_lt])
+                pre = self.buffer[:first_lt]
+                if self.mode == "thought" and "assistantfinal" in pre:
+                    idx = pre.find("assistantfinal")
+                    self._emit(pre[:idx])
+                    self.buffer = self.buffer[idx + len("assistantfinal"):]
+                    self.mode = "content"
+                    continue
+
+                self._emit(pre)
                 self.buffer = self.buffer[first_lt:]
 
             # Buffer starts with '<'. Check against known delimiter tags.
@@ -126,10 +182,9 @@ class StreamTokenParser:
                     for tag in ALL_TAGS
                 )
                 if longer_prefix_exists and not eof:
-                    # Wait for more tokens to see if longer compound tag arrives
                     break
 
-                # Consume the matched tag and transition state
+                # Consume matched tag and transition state
                 self.buffer = self.buffer[len(matched_tag):]
                 if matched_tag in THINKING_START_TAGS:
                     self.mode = "thought"
@@ -140,11 +195,9 @@ class StreamTokenParser:
             # Check if self.buffer is a prefix of any known tag
             is_prefix = any(tag.startswith(self.buffer) for tag in ALL_TAGS)
             if is_prefix and not eof:
-                # Wait for more tokens unless EOF
                 break
 
-            # If it's not a prefix, or EOF has been reached without a match:
-            # Emit the '<' character as ordinary text and advance
+            # Emit '<' and advance
             self._emit(self.buffer[0])
             self.buffer = self.buffer[1:]
 

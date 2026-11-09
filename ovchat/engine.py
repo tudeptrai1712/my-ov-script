@@ -199,6 +199,15 @@ class InferenceEngine:
                 self.pipe = pipeline_cls(str(self.model_path), self.device)
 
         self.tokenizer = self.pipe.get_tokenizer()
+        if self.model_path:
+            chat_template_file = self.model_path / "chat_template.jinja"
+            if chat_template_file.exists():
+                try:
+                    tmpl_text = chat_template_file.read_text(encoding="utf-8")
+                    self.tokenizer.set_chat_template(tmpl_text)
+                except Exception:
+                    pass
+
         self.generation_config = self.pipe.get_generation_config()
         self.generation_config.max_new_tokens = self.max_new_tokens
         if hasattr(self.generation_config, "temperature"):
@@ -248,23 +257,28 @@ class InferenceEngine:
 
     def _build_extra_context(
         self, user_extra: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+    ) -> Dict[str, int]:
         """
-        Builds the extra context dict passed to Jinja chat templates.
-        Supports both Google thinking format (enable_thinking) and OpenAI Harmony (reasoning_effort).
+        Builds the extra context dict passed to OpenVINO GenAI pipeline generation.
+        OpenVINO GenAI C++ pybind requires std::map<std::string, int64_t> for extra_context.
+        All values MUST be integers or booleans (int64_t) to prevent C++ type-cast errors.
         """
-        extra: Dict[str, Any] = {}
-        if self.reasoning_enabled:
-            extra["enable_thinking"] = True
-            extra["thinking"] = True
-            extra["reasoning_effort"] = getattr(self, "reasoning_effort", "medium") or "medium"
-        else:
-            extra["enable_thinking"] = False
-            extra["thinking"] = False
-            extra["reasoning_effort"] = "none"
-
+        extra: Dict[str, int] = {
+            "enable_thinking": 1 if self.reasoning_enabled else 0,
+            "thinking": 1 if self.reasoning_enabled else 0,
+        }
         if user_extra:
-            extra.update(user_extra)
+            for k, v in user_extra.items():
+                if isinstance(v, bool):
+                    extra[k] = 1 if v else 0
+                elif isinstance(v, int):
+                    extra[k] = v
+                elif isinstance(v, str):
+                    v_lower = v.lower()
+                    if v_lower in ("none", "false", "off", "0"):
+                        extra[k] = 0
+                    elif v_lower in ("true", "on", "1", "low", "medium", "high"):
+                        extra[k] = 1
         return extra
 
     def context_usage(self) -> int:

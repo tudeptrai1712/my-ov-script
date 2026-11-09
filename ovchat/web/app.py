@@ -446,21 +446,18 @@ def create_app() -> FastAPI:
         max_tokens = body.get("max_tokens") or body.get("max_completion_tokens") or DEFAULT_MAX_NEW_TOKENS
 
         # Extract per-request reasoning parameters
-        extra_ctx: Optional[Dict[str, Any]] = None
+        extra_ctx: Optional[Dict[str, int]] = None
         req_effort = body.get("reasoning_effort")
         req_thinking = body.get("enable_thinking")
         if req_effort is not None:
             effort_str = str(req_effort).strip().lower()
-            if effort_str == "none":
-                extra_ctx = {"reasoning_effort": "none", "enable_thinking": False, "thinking": False}
-            else:
-                extra_ctx = {"reasoning_effort": effort_str, "enable_thinking": True, "thinking": True}
+            is_enabled = 0 if effort_str in ("none", "0", "false", "off") else 1
+            extra_ctx = {"enable_thinking": is_enabled, "thinking": is_enabled}
         elif req_thinking is not None:
-            is_think = bool(req_thinking)
+            is_think = 1 if bool(req_thinking) else 0
             extra_ctx = {
                 "enable_thinking": is_think,
                 "thinking": is_think,
-                "reasoning_effort": "medium" if is_think else "none",
             }
 
         await _resolve_and_load_model(req_model, temperature, top_p, max_tokens)
@@ -675,21 +672,18 @@ def create_app() -> FastAPI:
         )
 
         # Extract per-request reasoning parameters
-        extra_ctx: Optional[Dict[str, Any]] = None
+        extra_ctx: Optional[Dict[str, int]] = None
         req_effort = body.get("reasoning_effort")
         req_thinking = body.get("enable_thinking")
         if req_effort is not None:
             effort_str = str(req_effort).strip().lower()
-            if effort_str == "none":
-                extra_ctx = {"reasoning_effort": "none", "enable_thinking": False, "thinking": False}
-            else:
-                extra_ctx = {"reasoning_effort": effort_str, "enable_thinking": True, "thinking": True}
+            is_enabled = 0 if effort_str in ("none", "0", "false", "off") else 1
+            extra_ctx = {"enable_thinking": is_enabled, "thinking": is_enabled}
         elif req_thinking is not None:
-            is_think = bool(req_thinking)
+            is_think = 1 if bool(req_thinking) else 0
             extra_ctx = {
                 "enable_thinking": is_think,
                 "thinking": is_think,
-                "reasoning_effort": "medium" if is_think else "none",
             }
 
         await _resolve_and_load_model(req_model, temperature, top_p, max_tokens)
