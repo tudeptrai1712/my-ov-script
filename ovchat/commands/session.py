@@ -88,16 +88,15 @@ def handle_info(args_str: str, context: CommandContext) -> CommandResult:
 
 def handle_think(args_str: str, context: CommandContext) -> CommandResult:
     """Toggles or explicitly configures reasoning mode (/think on, /think off, /think status)."""
-    if not context.engine.metadata.supports_reasoning:
-        print(f"\n{UI.YELLOW}Reasoning mode is not supported by model: {context.engine.metadata.name}.{UI.RESET}\n")
-        return CommandResult()
-
     arg = args_str.strip().lower()
 
     if arg in ("status", "info", "state"):
         curr = "enabled" if context.engine.reasoning_enabled else "disabled"
         col = UI.GREEN if context.engine.reasoning_enabled else UI.YELLOW
-        print(f"\n{col}Reasoning mode is currently {curr}.{UI.RESET}\n")
+        note = ""
+        if not context.engine.metadata.supports_reasoning:
+            note = f" {UI.DIM}(Model metadata did not flag reasoning tags){UI.RESET}"
+        print(f"\n{col}Reasoning mode is currently {curr}.{note}{UI.RESET}\n")
         return CommandResult()
 
     if arg in ("on", "1", "true", "enable", "yes"):
@@ -116,7 +115,10 @@ def handle_think(args_str: str, context: CommandContext) -> CommandResult:
 
     state_str = "enabled" if enabled else "disabled"
     color = UI.GREEN if enabled else UI.YELLOW
-    print(f"\n{color}Reasoning mode {state_str}.{UI.RESET}\n")
+    warn = ""
+    if not context.engine.metadata.supports_reasoning:
+        warn = f" {UI.DIM}(forced override: metadata did not flag reasoning tags){UI.RESET}"
+    print(f"\n{color}Reasoning mode {state_str}.{warn}{UI.RESET}\n")
     return CommandResult()
 
 

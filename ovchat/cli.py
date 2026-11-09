@@ -54,7 +54,7 @@ def console_listener(server) -> None:
 # COMMAND ACTIONS
 # ============================================================
 
-def chat_command() -> None:
+def chat_command(enable_reasoning_override: Optional[bool] = None) -> None:
     """Runs interactive OpenVINO terminal chat."""
     clear_screen()
     print(f"{UI.BOLD}{UI.CYAN}OpenVINO GenAI Chat{UI.RESET}\n")
@@ -122,7 +122,9 @@ def chat_command() -> None:
         print()
 
     # 6. Reasoning mode
-    if metadata.supports_reasoning:
+    if enable_reasoning_override is not None:
+        enable_reasoning = enable_reasoning_override
+    elif metadata.supports_reasoning:
         enable_reasoning = choose_boolean(
             "Enable reasoning / thinking mode?",
             default=DEFAULT_ENABLE_REASONING,
@@ -187,8 +189,7 @@ def chat_command() -> None:
     print("  /file    - attach file or PDF for context (/file <path>)")
     if metadata.is_vlm:
         print("  /image   - attach image or visual PDF pages (/image <path> [page(s)])")
-    if metadata.supports_reasoning:
-        print("  /think   - toggle reasoning mode (/think on, /think off)")
+    print("  /think   - toggle reasoning mode (/think on, /think off)")
     if metadata.is_moe:
         print("  /moe     - configure MoE expert offload to disk (/moe <ratio%>, /moe off)")
     print("  /hetero  - switch to Hetero Pipeline Parallelism (/hetero GPU,CPU)")
@@ -352,10 +353,14 @@ def entrypoint(argv: Optional[List[str]] = None) -> None:
         prog="ovchat",
         description="OpenVINO GenAI Chat & Serving Suite with Heterogeneous Pipeline Parallelism and MoE Offloading",
     )
+    parser.add_argument("--reasoning", action="store_true", default=None, help="Enable reasoning / thinking mode")
+    parser.add_argument("--no-reasoning", action="store_true", help="Disable reasoning / thinking mode")
     subparsers = parser.add_subparsers(dest="subcommand", help="Available subcommands")
 
     # subcommand: chat (default)
-    subparsers.add_parser("chat", help="Start interactive terminal chat session (default)")
+    chat_parser = subparsers.add_parser("chat", help="Start interactive terminal chat session (default)")
+    chat_parser.add_argument("--reasoning", action="store_true", default=None, help="Enable reasoning / thinking mode")
+    chat_parser.add_argument("--no-reasoning", action="store_true", help="Disable reasoning / thinking mode")
 
     # subcommand: serve
     serve_parser = subparsers.add_parser("serve", help="Start OpenAI-compatible FastAPI server")
@@ -428,8 +433,14 @@ def entrypoint(argv: Optional[List[str]] = None) -> None:
         models_command()
     else:
         # Default action: chat
+        reasoning_override: Optional[bool] = None
+        if getattr(args, "no_reasoning", False):
+            reasoning_override = False
+        elif getattr(args, "reasoning", None):
+            reasoning_override = True
+
         try:
-            chat_command()
+            chat_command(enable_reasoning_override=reasoning_override)
         except (KeyboardInterrupt, EOFError):
             print(f"\n{UI.YELLOW}Exited.{UI.RESET}")
         except Exception as e:

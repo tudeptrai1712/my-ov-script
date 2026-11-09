@@ -17,6 +17,7 @@ from .config import (
     DEFAULT_MOE_OFFLOAD_RATIO,
 )
 from .metadata import ModelMetadata, read_model_metadata
+from .reasoning import StreamTokenParser
 
 
 @dataclass
@@ -29,6 +30,8 @@ class GenerationResult:
     total_time_sec: float
     tokens_per_second: float
     prompt_tokens: int
+    reasoning: Optional[str] = None
+    raw_text: str = ""
 
 
 def count_tokens(tokenizer: Any, text: str) -> int:
@@ -77,8 +80,9 @@ class InferenceEngine:
             self.metadata = read_model_metadata(self.model_path)
 
         self.reasoning_enabled: bool = bool(
-            enable_reasoning and self.metadata and self.metadata.supports_reasoning
+            enable_reasoning and (not self.metadata or self.metadata.supports_reasoning)
         )
+        self.reasoning_effort: str = "medium" if self.reasoning_enabled else "none"
         self.enable_moe_offload: bool = enable_moe_offload
         self.moe_offload_ratio: int = moe_offload_ratio
         self.model_distribution_policy: str = model_distribution_policy
@@ -143,11 +147,12 @@ class InferenceEngine:
 
             self.metadata = read_model_metadata(self.model_path)
             if enable_reasoning is not None:
-                self.reasoning_enabled = bool(enable_reasoning and self.metadata.supports_reasoning)
+                self.reasoning_enabled = bool(enable_reasoning)
             else:
                 self.reasoning_enabled = bool(
-                    self.enable_reasoning_default and self.metadata.supports_reasoning
+                    self.enable_reasoning_default and (not self.metadata or self.metadata.supports_reasoning)
                 )
+            self.reasoning_effort = "medium" if self.reasoning_enabled else "none"
 
             return self._compile_pipeline(warmup=warmup)
 
@@ -241,6 +246,27 @@ class InferenceEngine:
                 "content": msg["content"],
             })
 
+    def _build_extra_context(
+        self, user_extra: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Builds the extra context dict passed to Jinja chat templates.
+        Supports both Google thinking format (enable_thinking) and OpenAI Harmony (reasoning_effort).
+        """
+        extra: Dict[str, Any] = {}
+        if self.reasoning_enabled:
+            extra["enable_thinking"] = True
+            extra["thinking"] = True
+            extra["reasoning_effort"] = getattr(self, "reasoning_effort", "medium") or "medium"
+        else:
+            extra["enable_thinking"] = False
+            extra["thinking"] = False
+            extra["reasoning_effort"] = "none"
+
+        if user_extra:
+            extra.update(user_extra)
+        return extra
+
     def context_usage(self) -> int:
         """Calculates current context token consumption for interactive session."""
         if not self.history_messages or not self.tokenizer:
@@ -250,7 +276,7 @@ class InferenceEngine:
             prompt = self.tokenizer.apply_chat_template(
                 self.chat_history,
                 True,
-                extra_context={"enable_thinking": self.reasoning_enabled},
+                extra_context=self._build_extra_context(),
             )
             encoded = self.tokenizer.encode(prompt)
             shape = encoded.input_ids.get_shape()
@@ -276,12 +302,16 @@ class InferenceEngine:
         self.history_messages.clear()
         self.chat_history = ov_genai.ChatHistory()
 
-    def set_reasoning(self, enable: bool) -> bool:
-        """Enables or disables reasoning mode if supported by model."""
-        if not self.metadata or not self.metadata.supports_reasoning:
-            self.reasoning_enabled = False
-            return False
+    def set_reasoning(self, enable: bool, effort: Optional[str] = None) -> bool:
+        """Enables or disables reasoning mode."""
         self.reasoning_enabled = bool(enable)
+        if effort:
+            self.reasoning_effort = effort
+        elif enable:
+            if not getattr(self, "reasoning_effort", None) or self.reasoning_effort == "none":
+                self.reasoning_effort = "medium"
+        else:
+            self.reasoning_effort = "none"
         return self.reasoning_enabled
 
     def set_moe_offload(self, enable: bool, ratio: Optional[int] = None) -> None:
@@ -298,10 +328,12 @@ class InferenceEngine:
         self,
         prompt: str,
         streaming_callback: Optional[Callable[[str], bool]] = None,
+        reasoning_callback: Optional[Callable[[str], bool]] = None,
+        extra_context: Optional[Dict[str, Any]] = None,
     ) -> GenerationResult:
         """
         Executes streaming inference for the interactive CLI session.
-        Appends user prompt and assistant response to session history.
+        Appends user prompt and clean assistant response to session history.
         """
         if self.pipe is None:
             raise RuntimeError("Cannot generate: No OpenVINO model is currently loaded.")
@@ -312,23 +344,35 @@ class InferenceEngine:
         self.rebuild_history()
         self.trim_context()
 
-        generated_chunks: List[str] = []
+        raw_chunks: List[str] = []
         ttft: Optional[float] = None
         gen_start = time.perf_counter()
+
+        def on_thought_token(token: str) -> None:
+            if reasoning_callback:
+                reasoning_callback(token)
+
+        def on_content_token(token: str) -> None:
+            if streaming_callback:
+                streaming_callback(token)
+
+        parser = StreamTokenParser(
+            on_content=on_content_token,
+            on_thought=on_thought_token,
+        )
 
         def internal_streamer(text: str) -> bool:
             nonlocal ttft
             if ttft is None:
                 ttft = time.perf_counter() - gen_start
-            generated_chunks.append(text)
-            if streaming_callback:
-                return bool(streaming_callback(text))
+            raw_chunks.append(text)
+            parser.feed(text)
             return False
 
         kwargs: Dict[str, Any] = {
             "generation_config": self.generation_config,
             "streamer": internal_streamer,
-            "extra_context": {"enable_thinking": self.reasoning_enabled},
+            "extra_context": self._build_extra_context(extra_context),
         }
 
         if self.metadata and self.metadata.is_vlm and self.pending_images:
@@ -338,23 +382,33 @@ class InferenceEngine:
         with self.lock:
             self.pipe.generate(self.chat_history, **kwargs)
 
-        total_time = time.perf_counter() - gen_start
-        full_text = "".join(generated_chunks)
+        parser.finish()
 
-        tokens_gen = count_tokens(self.tokenizer, full_text) if self.tokenizer else max(1, len(full_text) // 4)
+        total_time = time.perf_counter() - gen_start
+        raw_text = "".join(raw_chunks)
+        clean_thought = "".join(parser.thought_chunks).strip() if parser.thought_chunks else None
+        clean_content = "".join(parser.content_chunks).strip()
+
+        if not clean_content and not clean_thought:
+            clean_content = raw_text.strip()
+
+        tokens_gen = count_tokens(self.tokenizer, raw_text) if self.tokenizer else max(1, len(raw_text) // 4)
         tokens_per_sec = tokens_gen / total_time if total_time > 0 else 0.0
         ttft_val = ttft if ttft is not None else 0.0
 
-        self.history_messages.append({"role": "assistant", "content": full_text})
+        # Save clean content into conversation history so next turn prompt is clean
+        self.history_messages.append({"role": "assistant", "content": clean_content})
         self.rebuild_history()
 
         return GenerationResult(
-            text=full_text,
+            text=clean_content,
             tokens_generated=tokens_gen,
             ttft_sec=ttft_val,
             total_time_sec=total_time,
             tokens_per_second=tokens_per_sec,
             prompt_tokens=prompt_tokens_est,
+            reasoning=clean_thought,
+            raw_text=raw_text,
         )
 
     def generate_chat(
@@ -362,9 +416,11 @@ class InferenceEngine:
         messages: List[Dict[str, str]],
         images: Optional[List[ov.Tensor]] = None,
         streaming_callback: Optional[Callable[[str], bool]] = None,
+        reasoning_callback: Optional[Callable[[str], bool]] = None,
         max_new_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
+        extra_context: Optional[Dict[str, Any]] = None,
     ) -> GenerationResult:
         """
         Executes inference for an arbitrary list of messages (e.g. OpenAI /v1/chat/completions).
@@ -393,23 +449,35 @@ class InferenceEngine:
         if top_p is not None and hasattr(gen_cfg, "top_p"):
             gen_cfg.top_p = top_p
 
-        generated_chunks: List[str] = []
+        raw_chunks: List[str] = []
         ttft: Optional[float] = None
         gen_start = time.perf_counter()
+
+        def on_thought_token(token: str) -> None:
+            if reasoning_callback:
+                reasoning_callback(token)
+
+        def on_content_token(token: str) -> None:
+            if streaming_callback:
+                streaming_callback(token)
+
+        parser = StreamTokenParser(
+            on_content=on_content_token,
+            on_thought=on_thought_token,
+        )
 
         def internal_streamer(text: str) -> bool:
             nonlocal ttft
             if ttft is None:
                 ttft = time.perf_counter() - gen_start
-            generated_chunks.append(text)
-            if streaming_callback:
-                return bool(streaming_callback(text))
+            raw_chunks.append(text)
+            parser.feed(text)
             return False
 
         kwargs: Dict[str, Any] = {
             "generation_config": gen_cfg,
             "streamer": internal_streamer,
-            "extra_context": {"enable_thinking": self.reasoning_enabled},
+            "extra_context": self._build_extra_context(extra_context),
         }
 
         if self.metadata and self.metadata.is_vlm and images:
@@ -418,18 +486,27 @@ class InferenceEngine:
         with self.lock:
             self.pipe.generate(chat_hist, **kwargs)
 
-        total_time = time.perf_counter() - gen_start
-        full_text = "".join(generated_chunks)
+        parser.finish()
 
-        tokens_gen = count_tokens(self.tokenizer, full_text) if self.tokenizer else max(1, len(full_text) // 4)
+        total_time = time.perf_counter() - gen_start
+        raw_text = "".join(raw_chunks)
+        clean_thought = "".join(parser.thought_chunks).strip() if parser.thought_chunks else None
+        clean_content = "".join(parser.content_chunks).strip()
+
+        if not clean_content and not clean_thought:
+            clean_content = raw_text.strip()
+
+        tokens_gen = count_tokens(self.tokenizer, raw_text) if self.tokenizer else max(1, len(raw_text) // 4)
         tokens_per_sec = tokens_gen / total_time if total_time > 0 else 0.0
         ttft_val = ttft if ttft is not None else 0.0
 
         return GenerationResult(
-            text=full_text,
+            text=clean_content,
             tokens_generated=tokens_gen,
             ttft_sec=ttft_val,
             total_time_sec=total_time,
             tokens_per_second=tokens_per_sec,
             prompt_tokens=prompt_tokens_est,
+            reasoning=clean_thought,
+            raw_text=raw_text,
         )

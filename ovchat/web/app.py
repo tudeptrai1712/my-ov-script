@@ -445,6 +445,24 @@ def create_app() -> FastAPI:
         top_p = body.get("top_p", 0.95)
         max_tokens = body.get("max_tokens") or body.get("max_completion_tokens") or DEFAULT_MAX_NEW_TOKENS
 
+        # Extract per-request reasoning parameters
+        extra_ctx: Optional[Dict[str, Any]] = None
+        req_effort = body.get("reasoning_effort")
+        req_thinking = body.get("enable_thinking")
+        if req_effort is not None:
+            effort_str = str(req_effort).strip().lower()
+            if effort_str == "none":
+                extra_ctx = {"reasoning_effort": "none", "enable_thinking": False, "thinking": False}
+            else:
+                extra_ctx = {"reasoning_effort": effort_str, "enable_thinking": True, "thinking": True}
+        elif req_thinking is not None:
+            is_think = bool(req_thinking)
+            extra_ctx = {
+                "enable_thinking": is_think,
+                "thinking": is_think,
+                "reasoning_effort": "medium" if is_think else "none",
+            }
+
         await _resolve_and_load_model(req_model, temperature, top_p, max_tokens)
 
         # Process messages and multimodal images
@@ -489,8 +507,12 @@ def create_app() -> FastAPI:
         if stream:
             q = queue.Queue()
 
+            def thought_callback(chunk: str) -> bool:
+                q.put(("thought", chunk))
+                return False
+
             def streamer_callback(chunk: str) -> bool:
-                q.put(chunk)
+                q.put(("content", chunk))
                 return False
 
             def worker():
@@ -499,9 +521,11 @@ def create_app() -> FastAPI:
                         messages=parsed_history,
                         images=image_tensors,
                         streaming_callback=streamer_callback,
+                        reasoning_callback=thought_callback,
                         max_new_tokens=max_tokens,
                         temperature=temperature,
                         top_p=top_p,
+                        extra_context=extra_ctx,
                     )
                 except Exception as ex:
                     q.put(ex)
@@ -562,6 +586,12 @@ def create_app() -> FastAPI:
                         yield "data: [DONE]\n\n"
                         break
                     else:
+                        kind, token_text = item
+                        delta_payload = (
+                            {"reasoning_content": token_text}
+                            if kind == "thought"
+                            else {"content": token_text}
+                        )
                         chunk_obj = {
                             "id": completion_id,
                             "object": "chat.completion.chunk",
@@ -569,7 +599,7 @@ def create_app() -> FastAPI:
                             "model": engine.model_name,
                             "choices": [{
                                 "index": 0,
-                                "delta": {"content": item},
+                                "delta": delta_payload,
                                 "finish_reason": None,
                             }],
                         }
@@ -592,6 +622,7 @@ def create_app() -> FastAPI:
                 max_new_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
+                extra_context=extra_ctx,
             )
 
             tool_calls, clean_text = _extract_tool_calls(result.text)
@@ -600,6 +631,8 @@ def create_app() -> FastAPI:
                 "role": "assistant",
                 "content": clean_text if clean_text else (None if tool_calls else result.text),
             }
+            if result.reasoning:
+                msg_payload["reasoning_content"] = result.reasoning
             if tool_calls:
                 msg_payload["tool_calls"] = tool_calls
 
@@ -640,6 +673,24 @@ def create_app() -> FastAPI:
             or body.get("max_tokens")
             or DEFAULT_MAX_NEW_TOKENS
         )
+
+        # Extract per-request reasoning parameters
+        extra_ctx: Optional[Dict[str, Any]] = None
+        req_effort = body.get("reasoning_effort")
+        req_thinking = body.get("enable_thinking")
+        if req_effort is not None:
+            effort_str = str(req_effort).strip().lower()
+            if effort_str == "none":
+                extra_ctx = {"reasoning_effort": "none", "enable_thinking": False, "thinking": False}
+            else:
+                extra_ctx = {"reasoning_effort": effort_str, "enable_thinking": True, "thinking": True}
+        elif req_thinking is not None:
+            is_think = bool(req_thinking)
+            extra_ctx = {
+                "enable_thinking": is_think,
+                "thinking": is_think,
+                "reasoning_effort": "medium" if is_think else "none",
+            }
 
         await _resolve_and_load_model(req_model, temperature, top_p, max_tokens)
 
@@ -706,8 +757,12 @@ def create_app() -> FastAPI:
         if stream:
             q = queue.Queue()
 
+            def thought_callback(chunk: str) -> bool:
+                q.put(("thought", chunk))
+                return False
+
             def streamer_callback(chunk: str) -> bool:
-                q.put(chunk)
+                q.put(("content", chunk))
                 return False
 
             def worker():
@@ -716,9 +771,11 @@ def create_app() -> FastAPI:
                         messages=parsed_history,
                         images=image_tensors,
                         streaming_callback=streamer_callback,
+                        reasoning_callback=thought_callback,
                         max_new_tokens=max_tokens,
                         temperature=temperature,
                         top_p=top_p,
+                        extra_context=extra_ctx,
                     )
                 except Exception as ex:
                     q.put(ex)
@@ -753,18 +810,27 @@ def create_app() -> FastAPI:
                 yield f"event: response.content_part.added\ndata: {json.dumps({'part': {'type': 'output_text', 'text': ''}})}\n\n"
 
                 accumulated_text = []
+                accumulated_thought = []
                 while True:
                     await asyncio.sleep(0.005)
                     try:
-                        chunk = q.get_nowait()
+                        item = q.get_nowait()
                     except queue.Empty:
                         continue
 
-                    if chunk is None:
+                    if item is None:
                         full_reply = "".join(accumulated_text)
+                        full_thought = "".join(accumulated_thought).strip()
                         tool_calls, clean_text = _extract_tool_calls(full_reply)
 
                         output_items = []
+                        if full_thought:
+                            output_items.append({
+                                "id": f"rs_{uuid.uuid4().hex[:12]}",
+                                "type": "reasoning",
+                                "status": "completed",
+                                "content": [{"type": "reasoning_text", "text": full_thought}],
+                            })
                         if tool_calls:
                             for tc in tool_calls:
                                 output_items.append({
@@ -801,19 +867,25 @@ def create_app() -> FastAPI:
                         yield f"event: response.completed\ndata: {json.dumps({'response': final_resp})}\n\n"
                         yield "data: [DONE]\n\n"
                         break
-                    elif isinstance(chunk, Exception):
+                    elif isinstance(item, Exception):
                         err_resp = {
                             "id": response_id,
                             "object": "response",
                             "status": "failed",
-                            "error": {"message": str(chunk)},
+                            "error": {"message": str(item)},
                         }
                         yield f"event: response.failed\ndata: {json.dumps({'response': err_resp})}\n\n"
                         yield "data: [DONE]\n\n"
                         break
                     else:
-                        accumulated_text.append(chunk)
-                        yield f"event: response.output_text.delta\ndata: {json.dumps({'delta': chunk})}\n\n"
+                        kind, token_text = item
+                        if kind == "thought":
+                            accumulated_thought.append(token_text)
+                            # Optional: can emit thought delta
+                            yield f"event: response.reasoning_text.delta\ndata: {json.dumps({'delta': token_text})}\n\n"
+                        else:
+                            accumulated_text.append(token_text)
+                            yield f"event: response.output_text.delta\ndata: {json.dumps({'delta': token_text})}\n\n"
 
             return StreamingResponse(
                 responses_event_generator(),
@@ -833,10 +905,18 @@ def create_app() -> FastAPI:
                 max_new_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
+                extra_context=extra_ctx,
             )
 
             tool_calls, clean_text = _extract_tool_calls(result.text)
             output_items = []
+            if result.reasoning:
+                output_items.append({
+                    "id": f"rs_{uuid.uuid4().hex[:12]}",
+                    "type": "reasoning",
+                    "status": "completed",
+                    "content": [{"type": "reasoning_text", "text": result.reasoning}],
+                })
             if tool_calls:
                 for tc in tool_calls:
                     output_items.append({

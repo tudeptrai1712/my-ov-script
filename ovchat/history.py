@@ -65,6 +65,7 @@ class ChatHistorySaver:
         attached_file: Optional[str] = None,
         attached_image: Optional[str] = None,
         reasoning_used: bool = False,
+        reasoning: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Records a completed turn with detailed metrics and saves to disk."""
@@ -86,6 +87,7 @@ class ChatHistorySaver:
             assistant_response=assistant_response,
             metrics=metrics,
             reasoning_used=reasoning_used,
+            reasoning=reasoning,
         )
 
     def add_turn(
@@ -94,6 +96,7 @@ class ChatHistorySaver:
         assistant_response: str,
         metrics: Optional[Dict[str, Any]] = None,
         reasoning_used: bool = False,
+        reasoning: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Adds a completed conversation turn and immediately updates the file on disk."""
@@ -107,6 +110,7 @@ class ChatHistorySaver:
             "assistant": assistant_response,
             "metrics": turn_metrics,
             "reasoning_used": reasoning_used,
+            "reasoning": reasoning,
         })
         self.save()
 
@@ -150,6 +154,8 @@ class ChatHistorySaver:
                 lines.append(f"### Turn {idx} ({ts})\n")
                 lines.append(f"**User:**\n\n{turn['user']}\n")
                 lines.append(f"**AI{reason_tag}:**\n\n{turn['assistant']}\n")
+                if turn.get("reasoning"):
+                    lines.append(f"<details>\n<summary>Thinking Process</summary>\n\n{turn['reasoning']}\n\n</details>\n")
 
                 m = turn.get("metrics", {})
                 if m:

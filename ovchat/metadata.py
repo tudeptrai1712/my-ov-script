@@ -1,9 +1,12 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-import openvino as ov
+try:
+    import openvino as ov
+except ImportError:
+    ov = None
 
 from .models import model_size
 
@@ -115,7 +118,18 @@ def read_model_metadata(model_path: Path) -> ModelMetadata:
             template_text = chat_template_path.read_text(encoding="utf-8")
             if any(
                 tag in template_text
-                for tag in ("enable_thinking", "<|think|>", "<think>", "thought")
+                for tag in (
+                    "enable_thinking",
+                    "reasoning_effort",
+                    "reasoning_content",
+                    "<|channel|>analysis",
+                    "<|channel>thought",
+                    "<think>",
+                    "<|think|>",
+                    "<thought>",
+                    "<|thought|>",
+                    "thought",
+                )
             ):
                 supports_reasoning = True
         except Exception:
@@ -125,13 +139,24 @@ def read_model_metadata(model_path: Path) -> ModelMetadata:
         try:
             with open(tokenizer_config_path, encoding="utf-8") as f:
                 tok_config = json.load(f)
-            if (
-                "think_token" in tok_config.get("model_specific_special_tokens", {})
-                or "thinking" in str(tok_config.get("response_schema", ""))
+            tok_str = str(tok_config).lower()
+            if any(
+                k in tok_str
+                for k in ("think_token", "reasoning_effort", "reasoning_content", "thinking", "<|channel|>")
             ):
                 supports_reasoning = True
         except Exception:
             pass
+
+    if not supports_reasoning:
+        name_lower = name.lower()
+        model_type_lower = str(model_type).lower()
+        arch_lower = str(architecture).lower()
+        if any(
+            k in model_type_lower or k in arch_lower or k in name_lower
+            for k in ("gpt_oss", "deepseek_r1", "qwq", "-r1", "reasoning")
+        ):
+            supports_reasoning = True
 
     # 6. Mixture of Experts (MoE) detection
     enable_moe = (

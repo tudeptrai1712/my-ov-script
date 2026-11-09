@@ -229,22 +229,42 @@ class Chat:
         else:
             user_content = prompt
 
-        # Visual prompt banner
-        if self.engine.reasoning_enabled:
-            print(f"\n{UI.BOLD}{UI.GREEN}AI {UI.MAGENTA}[thinking]{UI.RESET}: ", end="", flush=True)
-        else:
-            print(f"\n{UI.BOLD}{UI.GREEN}AI:{UI.RESET} ", end="", flush=True)
+        thought_started = False
+        content_started = False
 
-        def streamer(chunk: str) -> bool:
+        def on_thought(chunk: str) -> bool:
+            nonlocal thought_started
+            if not thought_started:
+                thought_started = True
+                print(f"\n{UI.BOLD}{UI.MAGENTA}Thinking:{UI.RESET}\n{UI.DIM}", end="", flush=True)
+            print(chunk, end="", flush=True)
+            return False
+
+        def on_content(chunk: str) -> bool:
+            nonlocal content_started
+            if not content_started:
+                content_started = True
+                if thought_started:
+                    print(f"{UI.RESET}\n\n{UI.BOLD}{UI.GREEN}AI:{UI.RESET} ", end="", flush=True)
+                else:
+                    print(f"\n{UI.BOLD}{UI.GREEN}AI:{UI.RESET} ", end="", flush=True)
             print(chunk, end="", flush=True)
             return False
 
         try:
-            result = self.engine.generate(user_content, streaming_callback=streamer)
+            result = self.engine.generate(
+                user_content,
+                streaming_callback=on_content,
+                reasoning_callback=on_thought,
+            )
         except Exception as ex:
+            if thought_started:
+                print(UI.RESET, end="")
             print(f"\n\n{UI.RED}Generation error: {ex}{UI.RESET}\n")
             return
 
+        if thought_started and not content_started:
+            print(UI.RESET, end="")
         print()  # Final newline
 
         # Print throughput metrics
@@ -268,7 +288,8 @@ class Chat:
             context_tokens_used=self.engine.context_usage(),
             attached_file=None,
             attached_image=self.cmd_context.pending_image_info,
-            reasoning_used=self.engine.reasoning_enabled,
+            reasoning_used=bool(result.reasoning),
+            reasoning=result.reasoning,
         )
         self.cmd_context.pending_image_info = None
 
